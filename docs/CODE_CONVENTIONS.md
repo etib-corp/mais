@@ -1,13 +1,13 @@
 # Code Conventions
 
-This document defines coding standards for Mais. The goal is consistent,
+This document defines coding standards for maïs. The goal is consistent,
 readable, and maintainable code.
 
 ## General Rules
 
 - Use clear and descriptive names.
-- Keep indentation consistent (4 spaces unless file style differs).
-- Target line length around 80 to 100 characters.
+- Indentation is tabs and the line limit is 80 columns; both are enforced by
+  `.clang-format`. Run `scripts/run-clang-format.sh` before opening a PR.
 - Prefer small, focused functions over large monolithic blocks.
 - Avoid duplicated logic (DRY principle).
 - Add comments only when intent is not obvious.
@@ -21,6 +21,9 @@ readable, and maintainable code.
 - Prefer RAII and smart pointers (`std::unique_ptr`, `std::shared_ptr`).
 - Apply `const` correctness whenever possible.
 - Prefer `enum class` over unscoped enums.
+- Use `std::string_view` for read-only string parameters.
+- Keep pybind11 out of public headers. Hide implementation details behind a
+  forward-declared implementation type, as `mais::ScriptRuntime` does.
 
 ## Class Layout
 
@@ -39,15 +42,26 @@ Within each section, keep this order:
 
 ## Performance
 
-- Do not create or destroy GPU resources (meshes, textures, buffers) inside
-  input callbacks such as mouse, keyboard, or hand motion handlers. These
-  callbacks can fire many times per frame, and Vulkan buffer creation involves
-  staging buffers, memory allocation, and device transfers that can cause
-  frame-time spikes and resource churn.
-- Prefer creating resources once at initialization and updating their data or
-  transform per frame instead. For meshes whose vertex positions change but
-  whose topology is static, reuse the existing buffers and re-upload vertex
-  data (see `mais::GPUMesh::updateVertices`).
+- Do not build Python objects per frame. Every `ScriptRuntime::call()` crosses
+  into the interpreter, so pass scalars and let scripts read long-lived host
+  objects from their module instead of rebuilding them.
+- Prefer `callOptional()` for hooks. It keeps the host loop free of "does the
+  script implement this?" checks and short-circuits absent optional hooks.
+- Reuse what the runtime already prepares: `loadModule()` performs an import,
+  and the `traceback` module is imported once in `initialize()` so error
+  reporting never imports while an exception is pending.
+- Measure before optimizing. `benchmarks/` measures per-call overhead with
+  Google Benchmark (`-DBUILD_BENCHMARKS=ON`).
+
+## Scripting boundary
+
+- Keep the Python-facing surface small and deliberate: bind the operations
+  scripts actually need rather than whole engine or application classes.
+- Never let Python take ownership of a host object. Attach pointers with
+  `pybind11::return_value_policy::reference` (or `reference_internal`); the
+  interpreter must be stopped before those objects are destroyed.
+- Hook names are host-owned contracts. Document the point in the host loop at
+  which each one runs.
 
 ## Checklist Before Opening A PR
 

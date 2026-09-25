@@ -20,15 +20,114 @@
  SOFTWARE.
  */
 
+#include "mais/ScriptRuntime.hpp"
+
+#include <pybind11/embed.h>
+#include <pybind11/pybind11.h>
+
 #include <benchmark/benchmark.h>
 
-#include <memory>
+#include <cstdint>
+#include <iostream>
+#include <string>
+
+namespace py = pybind11;
 
 namespace
 {
+	/// A host-owned service the benchmark script calls back into.
+	struct HostCounter {
+		std::uint64_t value = 0;
+	};
 
+	mais::ScriptRuntime *gRuntime = nullptr;
 
+	/// Registers `host` and starts the interpreter once for every benchmark.
+	mais::Error setUp(mais::ScriptRuntime &runtime, HostCounter &counter)
+	{
+		mais::Error binding = runtime.registerModule(
+			"host", [&counter](mais::PythonModule &module) {
+				py::module_ &host = module.as<py::module_>();
+				py::class_<HostCounter>(host, "HostCounter")
+					.def_readwrite("value", &HostCounter::value);
+				host.attr("counter") =
+					py::cast(&counter, py::return_value_policy::reference);
+			});
+		if (binding) {
+			return binding;
+		}
 
+		if (mais::Error error = runtime.initialize(); error) {
+			return error;
+		}
+		if (mais::Error error =
+				runtime.addSearchPath(MAIS_BENCHMARK_SCRIPT_DIR);
+			error) {
+			return error;
+		}
+		return runtime.loadModule("bench");
+	}
 }	 // namespace
 
-BENCHMARK_MAIN();
+static void BM_CallWithoutArguments(benchmark::State &state)
+{
+	for (auto _: state) {
+		mais::Error error = gRuntime->call("bench", "noop");
+		benchmark::DoNotOptimize(error);
+	}
+}
+BENCHMARK(BM_CallWithoutArguments);
+
+static void BM_CallWithANumberArgument(benchmark::State &state)
+{
+	for (auto _: state) {
+		mais::Error error = gRuntime->call(
+			"bench", "with_delta", { mais::ScriptArgument::number(0.016) });
+		benchmark::DoNotOptimize(error);
+	}
+}
+BENCHMARK(BM_CallWithANumberArgument);
+
+static void BM_CallOptionalMissingFunction(benchmark::State &state)
+{
+	for (auto _: state) {
+		mais::Error error = gRuntime->callOptional("bench", "on_resize");
+		benchmark::DoNotOptimize(error);
+	}
+}
+BENCHMARK(BM_CallOptionalMissingFunction);
+
+/// Measures a full round trip: C++ calls Python, which calls back into C++.
+static void BM_CallThatInvokesAHostBinding(benchmark::State &state)
+{
+	for (auto _: state) {
+		mais::Error error = gRuntime->call("bench", "tick");
+		benchmark::DoNotOptimize(error);
+	}
+}
+BENCHMARK(BM_CallThatInvokesAHostBinding);
+
+int main(int argc, char **argv)
+{
+	benchmark::Initialize(&argc, argv);
+	if (benchmark::ReportUnrecognizedArguments(argc, argv)) {
+		return 1;
+	}
+
+	HostCounter counter;
+	mais::ScriptRuntime runtime;
+	if (mais::Error error = setUp(runtime, counter); error) {
+		std::cerr << error.toString() << '\n';
+		return 1;
+	}
+
+	gRuntime = &runtime;
+	benchmark::RunSpecifiedBenchmarks();
+	gRuntime = nullptr;
+
+	if (mais::Error error = runtime.shutdown(); error) {
+		std::cerr << error.toString() << '\n';
+		return 1;
+	}
+	return 0;
+}

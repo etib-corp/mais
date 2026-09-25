@@ -7,53 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The renderer API described in earlier revisions of this file was never released
+as part of this scripting library. 1.0.0 is the first release of this runtime.
+
 ### Added
 
-- Standard open-source documentation: `CHANGELOG.md`, `CODE_OF_CONDUCT.md`,
-  `CONTRIBUTING.md`, `SECURITY.md`, `AUTHORS.md`, and `LICENSE`.
-- Packaging & consumability: `install()`/`export()`, a CMake package config
-  (`evanConfig.cmake`) for `find_package(mais)`, and CPack rules.
-- Benchmark harness (`BUILD_BENCHMARKS`) covering scene object management.
-- CI hardening: `ctest` execution, ASan/UBSan and `clang-tidy` jobs, and
-  coverage reporting.
-- Documentation: full README, Getting Started tutorial, architecture diagrams,
-  and versioning & support policy.
-- A runnable `examples/scene_objects` sample.
-- `mais::RenderSettings`, passed to the `Engine` constructor, exposes the
-  construction-time render configuration: the MSAA sample count and the opaque
-  draw ordering.
+- `mais::ScriptRuntime`, the host-facing entry point: interpreter lifecycle
+  (`initialize()`/`shutdown()`), validated script search paths, module loading,
+  and hook invocation through `call()` and `callOptional()`.
+- `mais::BindingRegistry` and `mais::PythonModule`: hosts queue embedded Python
+  modules before the interpreter starts, and their callbacks run once Python is
+  live. This replaces `PYBIND11_EMBEDDED_MODULE` for embedded hosts, so no
+  extension module has to be built, installed, or placed on an import path.
+- `mais::Error`, `mais::ErrorCode`, `isOk`/`isRecoverable`/`isFatal`, and
+  `mais::ScriptArgument`: every fallible operation reports a message plus a
+  Python traceback instead of throwing or returning a bare Boolean.
+- A standalone fake-host acceptance test: the host injects a C++ service,
+  invokes a script that mutates it, and asserts on the reported traceback.
+- Lifecycle tests covering API misuse, single-owner-per-process enforcement,
+  three sequential restarts, and destruction without an explicit `shutdown()`.
+- `examples/standalone_host`, a complete host with no engine, no UI, and no
+  dependency on `guillaume` or `evan`. CTest runs it as an integration test.
+- A benchmark harness (`BUILD_BENCHMARKS`) measuring per-call overhead,
+  including a full round trip where Python calls back into a host binding.
+- Install/export rules so an external project can `find_package(mais)` and link
+  `mais::mais`, verified against a separate consumer.
 
 ### Changed
 
-- Replaced `file(GLOB)` with explicit source lists for reproducible builds.
-- Multisampling is now opt-in: `DeviceContext` defaults to
-  `VK_SAMPLE_COUNT_1_BIT`, a single-sampled desktop swapchain renders straight
-  into the swapchain image with no resolve pass, and `RenderSettings::msaaSamples`
-  or `DeviceContext::setMsaaSamples()` re-enable 2× or 4×. `EVAN_MSAA=1|2|4`
-  overrides both for measurements. The OpenXR context still honors the
-  runtime's recommended sample count when the runtime only offers multisampled
-  swapchain images.
-- Graphics pipelines are split into an opaque and an alpha-blended variant per
-  shader, selected from the material's alpha semantics
-  (`utility::graphic::Material::getAlphaMode`, overridable per shader with
-  `Renderer::setShaderBlendMode`). Blending is disabled for opaque geometry,
-  blended draws no longer write depth, opaque draws are ordered front-to-back
-  and blended draws back-to-front. This doubles the number of pipelines, which
-  the pending `VkPipelineCache` work should absorb.
-- `GPUMaterial`/`GPUTexture` now use the public `Texture::type()`/`pixels()`
-  accessors instead of accessing protected members.
-- Removed the hardcoded 60 FPS sleep in `Engine::updateDeltaTime()`; the loop
-  is now paced by the presentation mechanism (vsync on desktop, `xrWaitFrame`
-  on OpenXR), with an opt-in `Engine::setTargetFps()` limiter.
-- Desktop swapchains now prefer `VK_PRESENT_MODE_FIFO_KHR` (vsync) over
-  `VK_PRESENT_MODE_MAILBOX_KHR` so the loop is paced by default.
+- The project is now the generic scripting runtime described in
+  `docs/ARCHITECTURE.md`. The earlier Vulkan/OpenXR rendering layer and its
+  platform/backend build matrix (`BUILD_FOR_GLFW`, `BUILD_FOR_OPENXR`,
+  `BUILD_FOR_LINUX|MACOS|WINDOWS|ANDROID`, `Vulkan::Vulkan`, GLM, stb) are gone
+  from the build, along with the `utility` dependency.
+- Python discovery is delegated to pybind11 so the interpreter and the linked
+  library always come from the same installation. Select one explicitly with
+  `-DPython_EXECUTABLE=<path>`.
+- `initialize()` is atomic: a failing host binding or search path leaves Python
+  stopped rather than handing the host a half-configured runtime.
+- Documentation rewritten around the scripting lifecycle: host-owned objects,
+  binding ordering, GIL and thread affinity, and shutdown ordering.
 
-## [1.0.0] - 2025-08-21
+### Removed
 
-### Added
-
-- Initial release of the Mais rendering and runtime layer.
-- Vulkan-based rendering and swapchain management.
-- Desktop and XR platform abstractions (OpenXR and GLFW).
-- Scene, mesh, shader, and material helpers.
-- Optional backend integration for OpenXR or GLFW.
+- The renderer-specific API (`Engine`, `Renderer`, `Scene`, `GPUMesh`,
+  `GPUTexture`, `Platform`, `ADeviceBackend`), its examples, and its tests. UI
+  components belong to a consumer, not to maïs.
+- The Vulkan/NDK/Java prerequisites and the Vulkan SDK setup step in CI. The
+  build needs only CMake, a C++20 compiler, and Python development files.

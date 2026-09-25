@@ -7,11 +7,8 @@ on:
     branches: [ "main" ]
 
 env:
-  LUNARG_VULKAN_SDK_VERSION: 1.4.304.1
-  JAVA_TUMERIN_JDK_VERSION: 21
-  ANDROID_NDK_VERSION: r27d
-  ANDROID_ABI: arm64-v8a
-  ANDROID_PLATFORM: android-24
+  # Pinned so CI, the examples, and a developer machine agree on one version.
+  PYTHON_VERSION: "3.13"
 
 jobs:
   build:
@@ -20,73 +17,43 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: GLFW Linux
-            engine-backend: glfw
+          - name: Linux
             operating-system: linux
             runner: ubuntu-latest
-          - name: GLFW macOS
-            engine-backend: glfw
+          - name: macOS
             operating-system: macos
             runner: macos-latest
-          - name: GLFW Windows
-            engine-backend: glfw
+          - name: Windows
             operating-system: windows
             runner: windows-latest
-          - name: OpenXR Linux
-            engine-backend: openxr
-            operating-system: linux
-            runner: ubuntu-latest
-          - name: OpenXR Android
-            engine-backend: openxr
-            operating-system: android
-            runner: ubuntu-latest
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v6.0.2
 
-      - name: Install Ubuntu dependencies
-        if: matrix.runner == 'ubuntu-latest'
+      - name: Install Linux dependencies
+        if: matrix.operating-system == 'linux'
         run: bash scripts/install_ubuntu_dependencies.sh
 
-      - name: Configure Vulkan SDK using the downloaded spec
-        uses: humbletim/setup-vulkan-sdk@v1.2.1
+      - name: Set up Python
+        if: matrix.operating-system != 'linux'
+        uses: actions/setup-python@v6.0.0
         with:
-          vulkan-query-version: ${{ env.LUNARG_VULKAN_SDK_VERSION }}
-          vulkan-components: Vulkan-Headers, Vulkan-Loader
-          vulkan-use-cache: true
-
-      - name: Setup JDK
-        if: matrix.operating-system == 'android'
-        uses: actions/setup-java@v5.2.0
-        with:
-          distribution: "temurin"
-          java-version: ${{ env.JAVA_TUMERIN_JDK_VERSION }}
-
-      - name: Setup Android NDK
-        if: matrix.operating-system == 'android'
-        id: setup-ndk
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: ${{ env.ANDROID_NDK_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Configure CMake
+        # pybind11 owns Python discovery and finds the interpreter first on
+        # PATH, which is the one the setup step installed.
         run: >
           cmake -B ${{ github.workspace }}/build -S ${{ github.workspace }}
-          -DBUILD_FOR_GLFW=${{ matrix.engine-backend == 'glfw' }}
-          -DBUILD_FOR_OPENXR=${{ matrix.engine-backend == 'openxr' }}
-          -DBUILD_FOR_LINUX=${{ matrix.operating-system == 'linux' }}
-          -DBUILD_FOR_MACOS=${{ matrix.operating-system == 'macos' }}
-          -DBUILD_FOR_WINDOWS=${{ matrix.operating-system == 'windows' }}
-          -DBUILD_FOR_ANDROID=${{ matrix.operating-system == 'android' }}
-          -DBUILD_TESTING=${{ matrix.operating-system != 'android' }}
-          ${{ matrix.operating-system == 'android' && format('-DCMAKE_TOOLCHAIN_FILE={0}/build/cmake/android.toolchain.cmake -DANDROID_ABI={1} -DANDROID_PLATFORM={2}', steps.setup-ndk.outputs.ndk-path, env.ANDROID_ABI, env.ANDROID_PLATFORM) || '' }}
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=ON
+          -DBUILD_EXAMPLES=ON
 
       - name: Build
         run: >
           cmake --build ${{ github.workspace }}/build
 
       - name: Run tests
-        if: matrix.operating-system != 'android'
         run: >
           ctest
           --test-dir ${{ github.workspace }}/build

@@ -22,26 +22,20 @@ labels: enhancement
 
 *If all the modules are affected, just check here: (so high priority is justified)*
 
-- [ ] Mais
-    - [ ] Engine
-    - [ ] Platform
-    - [ ] Renderer
-    - [ ] Device
-    - [ ] Swapchain
-    - [ ] Swapchain Context
-    - [ ] Event
+- [ ] maïs
+    - [ ] Runtime lifecycle (initialize / shutdown)
+    - [ ] Bindings (embedded modules)
+    - [ ] Script loading (search paths, imports)
+    - [ ] Invocation (call / callOptional)
+    - [ ] Errors and tracebacks
+    - [ ] Build, packaging and exported targets
 
-- [ ] Guillaume
-    - [ ] Event
-    - [ ] ECS
-    - [ ] Systems
-    - [ ] Components
+- [ ] Documentation
+    - [ ] Getting started
+    - [ ] Architecture
+    - [ ] Error handling
 
-- [ ] Utility
-    - [ ] Math
-    - [ ] Logger
-    - [ ] Utils
-    - [ ] FileSystem
+- [ ] Tests, examples and benchmarks
 
 ## PoC (optional)
 

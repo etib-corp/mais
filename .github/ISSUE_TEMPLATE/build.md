@@ -10,17 +10,15 @@ assignees: clement-antoine-xavier
 # Context
 **Describe what problems is encountered and why it has to be fixed**
 
-## Concerned Platform APIs
-
-[ ] OpenXR
-[ ] GLFW
-
 ## Concerned OS
 
 [ ] Windows
 [ ] Linux
 [ ] MacOS
-[ ] Android
+
+## Build inputs
+
+**Which Python interpreter, and which pybind11 version, did CMake resolve?**
 
 ## Priority level
 **Add enough elements that shows how much this build issue is important to be fixed**

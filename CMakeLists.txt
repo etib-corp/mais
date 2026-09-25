@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.20)
 
 if(POLICY CMP0077)
     cmake_policy(SET CMP0077 NEW)
@@ -6,7 +6,7 @@ endif()
 
 project(mais
     VERSION 1.0.0
-    DESCRIPTION "Mais"
+    DESCRIPTION "Reusable C++ scripting runtime embedding Python through pybind11"
     HOMEPAGE_URL "https://etib-corp.github.io/mais"
     LANGUAGES CXX
 )
@@ -22,70 +22,20 @@ include(CTest)
 # 01. Policy & standard setup
 
 # 02. Options & configuration
-option(BUILD_FOR_OPENXR "Build with OpenXR support" OFF)
-option(BUILD_FOR_GLFW "Build with GLFW support" OFF)
-option(BUILD_FOR_ANDROID "Build for Android" OFF)
-option(BUILD_FOR_LINUX "Build for Linux" OFF)
-option(BUILD_FOR_WINDOWS "Build for Windows" OFF)
-option(BUILD_FOR_MACOS "Build for macOS" OFF)
+option(BUILD_EXAMPLES "Build the standalone example hosts" OFF)
+option(BUILD_BENCHMARKS "Build the benchmark harness" OFF)
 option(BUILD_DOCS "Build Doxygen documentation" OFF)
 option(BUILD_DOCS_ONLY "Configure only the documentation target" OFF)
 option(BUILD_ALL_DOCS "Build documentation for all libraries" OFF)
-option(BUILD_BENCHMARKS "Build the benchmark harness" OFF)
-option(DEV_MODE "Enable development mode" OFF)
+option(DEV_MODE "Enable development mode (extra warnings, warnings as errors)" OFF)
+option(MAIS_FETCH_PYBIND11 "Fetch pybind11 when it is not installed" ON)
+option(MAIS_FETCH_GOOGLETEST "Fetch GoogleTest when it is not installed" ON)
 
 if(BUILD_DOCS_ONLY)
     set(BUILD_DOCS ON)
     set(BUILD_TESTING OFF)
-endif()
-
-set(_SKIP_PLATFORM_VALIDATION FALSE)
-if(BUILD_DOCS_ONLY)
-    set(_SKIP_PLATFORM_VALIDATION TRUE)
-endif()
-
-set(PLATFORM_OPTION_COUNT 0)
-if(BUILD_FOR_ANDROID)
-    math(EXPR PLATFORM_OPTION_COUNT "${PLATFORM_OPTION_COUNT} + 1")
-endif()
-if(BUILD_FOR_LINUX)
-    math(EXPR PLATFORM_OPTION_COUNT "${PLATFORM_OPTION_COUNT} + 1")
-endif()
-if(BUILD_FOR_WINDOWS)
-    math(EXPR PLATFORM_OPTION_COUNT "${PLATFORM_OPTION_COUNT} + 1")
-endif()
-if(BUILD_FOR_MACOS)
-    math(EXPR PLATFORM_OPTION_COUNT "${PLATFORM_OPTION_COUNT} + 1")
-endif()
-
-if(NOT _SKIP_PLATFORM_VALIDATION)
-    if(NOT PLATFORM_OPTION_COUNT EQUAL 1)
-        message(FATAL_ERROR "Invalid platform configuration: enable exactly one platform option (BUILD_FOR_ANDROID, BUILD_FOR_LINUX, BUILD_FOR_WINDOWS, BUILD_FOR_MACOS).")
-    endif()
-endif()
-
-set(BACKEND_OPTION_COUNT 0)
-if(BUILD_FOR_OPENXR)
-    math(EXPR BACKEND_OPTION_COUNT "${BACKEND_OPTION_COUNT} + 1")
-endif()
-if(BUILD_FOR_GLFW)
-    math(EXPR BACKEND_OPTION_COUNT "${BACKEND_OPTION_COUNT} + 1")
-endif()
-
-if(NOT _SKIP_PLATFORM_VALIDATION)
-    if(NOT BACKEND_OPTION_COUNT EQUAL 1)
-        message(FATAL_ERROR "Invalid backend configuration: enable exactly one backend option (BUILD_FOR_OPENXR or BUILD_FOR_GLFW).")
-    endif()
-endif()
-
-if(BUILD_FOR_LINUX)
-    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ConfigLinux.cmake)
-elseif(BUILD_FOR_MACOS)
-    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ConfigMacOS.cmake)
-elseif(BUILD_FOR_WINDOWS)
-    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ConfigWindows.cmake)
-elseif(BUILD_FOR_ANDROID)
-    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ConfigAndroid.cmake)
+    set(BUILD_EXAMPLES OFF)
+    set(BUILD_BENCHMARKS OFF)
 endif()
 
 # 03. Global properties
@@ -94,203 +44,97 @@ endif()
 set(HEADERS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/headers")
 set(SOURCES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/sources")
 
+include(GNUInstallDirs)
+
 if(NOT BUILD_DOCS_ONLY)
-    # Dependencies
-    include(FetchContent)
+    # 04. Dependencies
+    #
+    # pybind11 is the binding technology behind every host-facing feature.
+    # The public headers deliberately do not include it, so consumers need it
+    # to link, not to compile against maïs.
+    set(PYBIND11_FINDPYTHON ON CACHE BOOL "" FORCE)
+    set(PYBIND11_INSTALL OFF CACHE BOOL "" FORCE)
+    set(PYBIND11_TEST OFF CACHE BOOL "" FORCE)
+    set(MAIS_PYBIND11_TAG "v2.13.6")
 
-    set(GLM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(glm
-        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm
-    )
-    FetchContent_MakeAvailable(glm)
+    # Embedding links the Python runtime itself rather than the
+    # extension-module shim, so a development installation is required.
+    # pybind11 owns Python discovery for the whole build: a second
+    # find_package(Python...) risks resolving the interpreter and the library
+    # to different installations. Select an interpreter with
+    # -DPython_EXECUTABLE=<path>.
+    find_package(pybind11 CONFIG QUIET)
+    if(NOT pybind11_FOUND)
+        if(NOT MAIS_FETCH_PYBIND11)
+            message(FATAL_ERROR
+                "pybind11 was not found and MAIS_FETCH_PYBIND11 is OFF. "
+                "Install pybind11 or reconfigure with -DMAIS_FETCH_PYBIND11=ON."
+            )
+        endif()
 
-    FetchContent_Declare(stb
-        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/stb
-    )
-    FetchContent_MakeAvailable(stb)
-
-    find_package(Vulkan REQUIRED)
-
-    FetchContent_Declare(utility
-        GIT_REPOSITORY https://github.com/etib-corp/utility.git
-        GIT_TAG main
-        GIT_SHALLOW TRUE
-        GIT_PROGRESS TRUE
-    )
-    FetchContent_MakeAvailable(utility)
-
-    # 04. Library definition
-    include(cmake/Sources.cmake)
-
-    if(BUILD_SHARED_LIBS)
-        add_library(${PROJECT_NAME} SHARED)
-    else()
-        add_library(${PROJECT_NAME} STATIC)
+        include(FetchContent)
+        FetchContent_Declare(pybind11
+            GIT_REPOSITORY https://github.com/pybind/pybind11.git
+            GIT_TAG ${MAIS_PYBIND11_TAG}
+            GIT_SHALLOW TRUE
+            GIT_PROGRESS TRUE
+        )
+        FetchContent_MakeAvailable(pybind11)
+        set(pybind11_VERSION "${MAIS_PYBIND11_TAG}")
     endif()
 
-    target_sources(${PROJECT_NAME}
-        PRIVATE
-            ${EVAN_SOURCES_COMMON}
+    # pybind11 is not ABI-compatible across major versions, so the installed
+    # package records the major it was built against and rejects a mismatch.
+    string(REGEX REPLACE "^v" "" MAIS_PYBIND11_VERSION "${pybind11_VERSION}")
+    string(REGEX MATCH "^[0-9]+" MAIS_PYBIND11_VERSION_MAJOR
+        "${MAIS_PYBIND11_VERSION}"
     )
 
-    # 05. Include directories
+    # 05. Library definition
+    include(cmake/Sources.cmake)
+
+    add_library(${PROJECT_NAME} ${MAIS_SOURCES})
+    add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
+
+    # 06. Include directories
     target_include_directories(${PROJECT_NAME}
         PUBLIC
             $<BUILD_INTERFACE:${HEADERS_DIR}>
-            $<INSTALL_INTERFACE:include>
-            $<BUILD_INTERFACE:${stb_SOURCE_DIR}>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     )
 
-    # 06. Compile definitions & options
-    target_compile_definitions(${PROJECT_NAME}
-        PUBLIC
-            GLM_FORCE_RADIANS
-            GLM_FORCE_DEPTH_ZERO_TO_ONE
-            GLM_ENABLE_EXPERIMENTAL
-    )
-
-    # 07. Link dependencies
-    target_link_libraries(${PROJECT_NAME}
-        PUBLIC
-            Vulkan::Vulkan
-            glm
-            utility
-    )
-
-    # 08. Backend-specific configuration
-
-    # OpenXR flags
-    if(BUILD_FOR_OPENXR)
-        message(STATUS "Building with OpenXR support")
-        target_compile_definitions(${PROJECT_NAME}
-            PUBLIC
-                XR_USE_GRAPHICS_API_VULKAN
-                __OPENXR__
-        )
-    endif()
-
-    # OpenXR Android flags
-    if(BUILD_FOR_OPENXR AND BUILD_FOR_ANDROID)
-        target_compile_definitions(${PROJECT_NAME}
-            PUBLIC
-                XR_USE_PLATFORM_ANDROID
-                VK_USE_PLATFORM_ANDROID_KHR
-        )
-
-        if(JAVA_INCLUDE_PATHS)
-            target_include_directories(${PROJECT_NAME} PRIVATE ${JAVA_INCLUDE_PATHS})
-        endif()
-
-        find_library(log-lib log)
-        find_library(android-lib android)
-        find_library(jnigraphics-lib jnigraphics)
-    endif()
-
-    # Android system libraries are only available when an Android NDK
-    # toolchain is in use. Guard each link so a missing NDK does not hard-fail
-    # configuration (e.g. host builds without the NDK installed).
-    if(BUILD_FOR_OPENXR AND BUILD_FOR_ANDROID)
-        if(log-lib)
-            target_link_libraries(${PROJECT_NAME} PRIVATE ${log-lib})
-        endif()
-        if(android-lib)
-            target_link_libraries(${PROJECT_NAME} PRIVATE ${android-lib})
-        endif()
-        if(jnigraphics-lib)
-            target_link_libraries(${PROJECT_NAME} PRIVATE ${jnigraphics-lib})
-        endif()
-    endif()
-
-    # OpenXR dependency options
-    if(BUILD_FOR_OPENXR)
-        set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
-        set(BUILD_CONFORMANCE_TESTS OFF CACHE BOOL "" FORCE)
-        set(BUILD_API_LAYERS OFF CACHE BOOL "" FORCE)
-        set(BUILD_WITH_SYSTEM_JSONCPP OFF CACHE BOOL "Use bundled jsoncpp for OpenXR SDK" FORCE)
-    endif()
-
-    # OpenXR fetch
-    if(BUILD_FOR_OPENXR)
-        FetchContent_Declare(OpenXR-SDK
-            SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/OpenXR-SDK
-        )
-        FetchContent_MakeAvailable(OpenXR-SDK)
-    endif()
-
-    # OpenXR sources
-    if(BUILD_FOR_OPENXR)
-        target_sources(${PROJECT_NAME}
-            PRIVATE
-                ${EVAN_SOURCES_OPENXR}
-        )
-
-        if(BUILD_FOR_ANDROID)
-            target_sources(${PROJECT_NAME}
-                PRIVATE
-                    ${EVAN_SOURCES_OPENXR_ANDROID}
+    # 07. Compile options
+    if(DEV_MODE)
+        if(MSVC)
+            target_compile_options(${PROJECT_NAME} PRIVATE /W4 /WX)
+        else()
+            target_compile_options(${PROJECT_NAME} PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Werror
             )
         endif()
     endif()
 
-    # OpenXR links
-    if(BUILD_FOR_OPENXR)
-        target_link_libraries(${PROJECT_NAME}
-            PUBLIC
-                OpenXR::openxr_loader
-        )
-    endif()
+    # 08. Link dependencies
+    #
+    # PRIVATE keeps pybind11 out of the public compile interface while CMake
+    # still propagates the link requirements to consumers of the static
+    # library. pybind11::embed also carries the embeddable Python library and
+    # its headers, which the runtime uses directly.
+    target_link_libraries(${PROJECT_NAME}
+        PRIVATE
+            pybind11::embed
+    )
 
-    # GLFW fetch
-    if(BUILD_FOR_GLFW)
-        message(STATUS "Building with GLFW support")
-
-        FetchContent_Declare(glfw
-            SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw
-        )
-        FetchContent_MakeAvailable(glfw)
-    endif()
-
-    # GLFW definitions
-    if(BUILD_FOR_GLFW)
-        target_compile_definitions(${PROJECT_NAME}
-            PUBLIC
-                __GLFW__
-        )
-    endif()
-
-    # GLFW sources
-    if(BUILD_FOR_GLFW)
-        target_sources(${PROJECT_NAME}
-            PRIVATE
-                ${EVAN_SOURCES_GLFW}
-        )
-    endif()
-
-    # GLFW links
-    if(BUILD_FOR_GLFW)
-        target_link_libraries(${PROJECT_NAME}
-            PUBLIC
-                glfw
-        )
-    endif()
-
-    if(DEV_MODE)
-        target_compile_definitions(
-            ${PROJECT_NAME}
-            PRIVATE
-            DEV
-        )
-    endif()
-
-    # 08b. Packaging & consumability
-    include(GNUInstallDirs)
+    # 09. Packaging & consumability
 
     install(TARGETS ${PROJECT_NAME}
         EXPORT ${PROJECT_NAME}Targets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-        INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     )
 
     install(DIRECTORY ${HEADERS_DIR}/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
@@ -330,17 +174,16 @@ if(NOT BUILD_DOCS_ONLY)
     include(CPack)
 endif()
 
-# 09. Documentations
+# 10. Documentation
 
-if(BUILD_ALL_DOCS OR BUILD_DOCS_ONLY)
+if(BUILD_DOCS)
     message(STATUS "Building documentation...")
-    include(cmake/Docs.cmake)
     add_subdirectory(docs)
 else()
     message(STATUS "Skipping documentation...")
 endif()
 
-# 10. Tests
+# 11. Tests
 
 if(BUILD_TESTING)
     message(STATUS "Building tests...")
@@ -349,13 +192,16 @@ else()
     message(STATUS "Skipping tests...")
 endif()
 
-# 11. Benchmarks
+# 12. Benchmarks
 
 if(BUILD_BENCHMARKS)
     message(STATUS "Building benchmarks...")
     add_subdirectory(benchmarks)
 endif()
 
-# 12. Examples
+# 13. Examples
 
-add_subdirectory(examples)
+if(BUILD_EXAMPLES)
+    message(STATUS "Building examples...")
+    add_subdirectory(examples)
+endif()

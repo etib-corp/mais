@@ -1,6 +1,6 @@
 # Commit Conventions
 
-Mais uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)
+maïs uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)
 to keep history readable and useful.
 
 ## Commit Format
@@ -24,9 +24,12 @@ to keep history readable and useful.
 
 The scope is optional and indicates the affected area, for example:
 
-- `core`
-- `render`
-- `platform`
+- `runtime`
+- `bindings`
+- `scripts`
+- `build`
+- `tests`
+- `docs`
 
 ## Description
 
@@ -36,10 +39,10 @@ The scope is optional and indicates the affected area, for example:
 
 ## Good Examples
 
-- `feat(render): add new material types`
-- `fix(platform): prevent crash on startup`
+- `feat(runtime): add callOptional for optional hooks`
+- `fix(bindings): keep host objects alive across shutdown`
 - `docs: update installation instructions`
-- `refactor(core): simplify frame loop`
+- `refactor(runtime): move traceback capture out of the error path`
 
 ## Avoid
 

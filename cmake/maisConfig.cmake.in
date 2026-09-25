@@ -1,0 +1,32 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# maïs embeds Python through pybind11. The public headers do not include
+# pybind11, but linking the static library still needs its targets, which in
+# turn locate the embeddable Python runtime.
+set(PYBIND11_FINDPYTHON ON)
+find_dependency(pybind11 CONFIG)
+
+# pybind11 is not ABI-compatible across major versions: linking a maïs built
+# against one major version with a different one produces confusing failures at
+# runtime, so the mismatch is reported here instead.
+if(NOT pybind11_VERSION_MAJOR AND pybind11_VERSION)
+    string(REGEX MATCH "^[0-9]+" pybind11_VERSION_MAJOR "${pybind11_VERSION}")
+endif()
+
+set(_mais_pybind11_major "@MAIS_PYBIND11_VERSION_MAJOR@")
+if(_mais_pybind11_major
+   AND pybind11_VERSION_MAJOR
+   AND NOT pybind11_VERSION_MAJOR STREQUAL _mais_pybind11_major)
+    set(mais_FOUND FALSE)
+    set(mais_NOT_FOUND_MESSAGE
+        "maïs was built against pybind11 ${_mais_pybind11_major}.x but pybind11 ${pybind11_VERSION} was found. pybind11 is not ABI-compatible across major versions; provide a matching pybind11 (for example, fetch the same version maïs was built with)."
+    )
+    return()
+endif()
+unset(_mais_pybind11_major)
+
+include("${CMAKE_CURRENT_LIST_DIR}/@PROJECT_NAME@Targets.cmake")
+
+check_required_components(@PROJECT_NAME@)

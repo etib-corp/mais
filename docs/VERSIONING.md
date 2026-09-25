@@ -1,6 +1,6 @@
 # Versioning & Support Policy
 
-This document describes how Mais is versioned and supported.
+This document describes how maïs is versioned and supported.
 
 ## Versioning
 

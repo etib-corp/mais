@@ -1,25 +1,16 @@
 # Enable testing
 enable_testing()
 
-# Set test directories
+# Test directories
 set(TEST_HEADERS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/headers")
+set(TEST_SCRIPTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/sources/scripts")
 
 # Explicit test source list (no file(GLOB)) for reproducible builds.
 set(TEST_SOURCES
-    sources/test_engine.cpp
-    sources/test_backend_abstraction.cpp
-    sources/test_desktop_backend.cpp
-    sources/test_swapchain_view.cpp
-    sources/test_swapchain_format.cpp
-    sources/test_gputexture.cpp
-    sources/test_gpumaterial.cpp
+    sources/test_binding_registry.cpp
     sources/test_error.cpp
-    sources/test_frustum.cpp
-    sources/test_memory_type.cpp
-    sources/test_pipeline_cache.cpp
-    sources/test_render_settings.cpp
-    sources/test_scene.cpp
-    sources/test_viewset.cpp
+    sources/test_lifecycle.cpp
+    sources/test_script_runtime.cpp
 )
 
 # Fetch GoogleTest
@@ -30,6 +21,9 @@ FetchContent_Declare(
 )
 # Prevent GoogleTest from overriding our compiler/linker settings on Windows
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+# maïs is the package being installed: a test dependency must not add its own
+# headers, libraries or documentation to that installation.
+set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 # Create test executable
@@ -40,9 +34,16 @@ target_include_directories(test_${PROJECT_NAME} PRIVATE
     ${TEST_HEADERS_DIR}
 )
 
-# Link libraries
+# The tests play the role of a host: they define bindings with pybind11 and
+# need to know where the fixture scripts live.
+target_compile_definitions(test_${PROJECT_NAME} PRIVATE
+    MAIS_TEST_SCRIPT_DIR="${TEST_SCRIPTS_DIR}"
+)
+
+# Link libraries. pybind11 is linked explicitly because maïs keeps it private.
 target_link_libraries(test_${PROJECT_NAME} PRIVATE
     mais
+    pybind11::embed
     gtest_main
 )
 

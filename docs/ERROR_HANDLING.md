@@ -1,68 +1,90 @@
 # Error handling
 
-Mais normalizes every backend error (Vulkan, OpenXR, GLFW) into a single
-taxonomy, `mais::Error`, defined in `headers/mais/Error.hpp`. Backends map their
-native result codes at the boundary so consumers react uniformly.
+Every fallible operation returns `mais::Error`, defined in
+`headers/mais/Error.hpp`. Nothing in the scripting runtime throws for an
+expected failure, so a script that raises an exception cannot unwind the host's
+frame loop, and the host always receives enough context to log or display the
+problem.
 
 ## The taxonomy
 
-| `mais::Error`      | Meaning                                            | Handling          |
-| ------------------ | -------------------------------------------------- | ----------------- |
-| `Ok`               | Success                                            | Continue          |
-| `Suboptimal`       | `VK_SUBOPTIMAL_KHR` (presentable, recreate soon)   | Handle            |
-| `SwapchainOutOfDate` | `VK_ERROR_OUT_OF_DATE_KHR` / `VK_ERROR_SURFACE_LOST_KHR` | Handle (engine already recreates) |
-| `NotReady`         | `VK_NOT_READY` / XR session not running / invalid time | Retry or skip frame |
-| `DeviceLost`       | `VK_ERROR_DEVICE_LOST`                             | Fatal             |
-| `RuntimeLost`      | XR session/instance loss, `XR_SESSION_STATE_LOSS_PENDING` | Fatal     |
-| `OutOfMemory`      | `VK_ERROR_OUT_OF_{HOST,DEVICE}_MEMORY`             | Fatal             |
-| `RuntimeError`     | Anything else (including GLFW errors)              | Fatal             |
+| `mais::ErrorCode`    | Meaning                                                     | Handling                       |
+| -------------------- | ----------------------------------------------------------- | ------------------------------ |
+| `Ok`                 | Success                                                     | Continue                       |
+| `NotInitialized`     | Used before `initialize()` or after `shutdown()`            | Fix the call order             |
+| `AlreadyInitialized` | `initialize()` or `registerModule()` after startup          | Register bindings first        |
+| `InterpreterFailure` | Python could not start/stop, or another interpreter exists   | Fatal: stop scripting          |
+| `InvalidArgument`    | Empty name, empty binding callback, empty search path        | Fix the call                   |
+| `ScriptNotFound`     | A search path is not an existing directory                   | Fix the path                   |
+| `ModuleNotFound`     | A module could not be imported, or was never loaded          | Load it first                  |
+| `FunctionNotFound`   | The module has no such function                              | Use `callOptional()` for hooks |
+| `TypeMismatch`       | A value could not be converted, or the attribute is not callable | Fix the argument or the script |
+| `InvocationFailed`   | The script raised a Python exception                          | Log `traceback()` and continue |
 
-Helpers: `isOk`, `isFatal`, `isRecoverable`.
+Helpers: `isOk`, `isRecoverable`, `isFatal`, and `errorCodeName`.
 
 ## Consumer contract
 
-Frame operations return `mais::Error`:
+Every fallible method returns `mais::Error`:
 
-- `Engine::update()` → `Error`
-- `Engine::render()` → `Error`
-- `Renderer::drawFrame()` → `Error`
-- `ADeviceBackend::preprocessFrame/processFrame/postprocessFrame` → `Error`
+- `ScriptRuntime::initialize()` / `shutdown()`
+- `ScriptRuntime::registerModule()`
+- `ScriptRuntime::addSearchPath()` / `loadModule()`
+- `ScriptRuntime::call()` / `callOptional()`
 
-Handle recoverable errors (`Suboptimal`, `SwapchainOutOfDate`, `NotReady`) and
-keep running. On a fatal error (`DeviceLost`, `RuntimeLost`, `OutOfMemory`,
-`RuntimeError`) tear down cleanly.
+A default-constructed `Error` is `Ok`, and `explicit operator bool()` reports
+failure, so the check reads the same way as `std::error_code`:
 
 ```cpp
-while (!platform->shouldClose()) {
-    if (mais::Error error = engine.update(); mais::isFatal(error)) {
-        break; // stop cleanly
-    }
-    if (mais::Error error = engine.render(); error != mais::Error::Ok) {
-        if (mais::isRecoverable(error)) {
-            continue; // swapchain was recreated, retry next frame
+while (host.isRunning()) {
+    host.processFrame();
+
+    if (mais::Error error = runtime.callOptional("game", "on_update"); error) {
+        std::cerr << error.toString() << '\n';
+        if (mais::isFatal(error.code())) {
+            break;  // the interpreter is unusable; scripting must stop
         }
-        break; // fatal
-    }
-    engine.pollEvents();
-    if (mais::isFatal(engine.getLastError())) {
-        break; // e.g. XR_SESSION_STATE_LOSS_PENDING
+        // Recoverable: the host keeps running and logs the failure.
     }
 }
 ```
 
-`pollEvents()` keeps returning the event vector; the reason a platform is
-closing is queryable via `Engine::getLastError()` / `IPlatform::getLastError()`.
+Only `InterpreterFailure` is fatal. Every other code means the interpreter is
+still usable, so the host decides whether to retry, ignore, or stop.
 
-## Backend mappings
+## Python exceptions
 
-- `mapVkResult(VkResult)` — Vulkan codes (see `sources/Error.cpp`).
-- `mapXrResult(XrResult)` and `mapSessionState(XrSessionState)` — OpenXR codes
-  (see `sources/openxr/XrError.cpp`).
-- GLFW errors are swept in `IDesktopPlatform::pollEvents` and mapped to
-  `RuntimeError`.
+When a script raises, the runtime captures the exception pybind11 reports and
+fills both halves of the error:
 
-## Init helpers
+- `Error::message()` — the Python message, for example
+  `ValueError: boom from Python`.
+- `Error::traceback()` — the traceback formatted by
+  `traceback.format_exception()`, including the script file and line.
 
-Resource-creation helpers (`createBuffer`, `createImage`, `transitionImageLayout`,
-`copyBuffer`, `copyBufferToImage`) return `mais::Error`; `createImageView`
-returns `mais::Result<VkImageView>`.
+```cpp
+mais::Error error = runtime.call("game", "explode");
+if (error) {
+    std::cerr << error.toString();        // "[InvocationFailed] ValueError: ..."
+    std::cerr << error.message() << '\n';
+    std::cerr << error.traceback() << '\n';  // empty when none was captured
+}
+```
+
+Tracebacks are best-effort. A failure with no Python frame (a failed import
+argument check, for example) still yields a message, and `hasTraceback()`
+reports which case you are in.
+
+## Errors versus exceptions
+
+`ScriptRuntime` methods report through `Error` rather than throwing.
+`BindingRegistry::add()` throws `std::invalid_argument` for a programming error
+such as an empty module name, and `ScriptRuntime::registerModule()` converts
+that into `InvalidArgument` so hosts see one error style.
+
+## Failure atomicity
+
+`initialize()` is atomic: if a host binding throws, or a queued search path is
+rejected, the interpreter is stopped again and the runtime is left
+uninitialized. A host therefore never has to reason about a half-configured
+runtime.
