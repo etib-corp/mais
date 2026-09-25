@@ -1,0 +1,51 @@
+# Enable testing
+enable_testing()
+
+# Set test directories
+set(TEST_HEADERS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/headers")
+
+# Explicit test source list (no file(GLOB)) for reproducible builds.
+set(TEST_SOURCES
+    sources/test_engine.cpp
+    sources/test_backend_abstraction.cpp
+    sources/test_desktop_backend.cpp
+    sources/test_swapchain_view.cpp
+    sources/test_swapchain_format.cpp
+    sources/test_gputexture.cpp
+    sources/test_gpumaterial.cpp
+    sources/test_error.cpp
+    sources/test_frustum.cpp
+    sources/test_memory_type.cpp
+    sources/test_pipeline_cache.cpp
+    sources/test_render_settings.cpp
+    sources/test_scene.cpp
+    sources/test_viewset.cpp
+)
+
+# Fetch GoogleTest
+include(FetchContent)
+FetchContent_Declare(
+    googletest
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/googletest
+)
+# Prevent GoogleTest from overriding our compiler/linker settings on Windows
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
+# Create test executable
+add_executable(test_${PROJECT_NAME} ${TEST_SOURCES})
+
+# Configure include directories
+target_include_directories(test_${PROJECT_NAME} PRIVATE
+    ${TEST_HEADERS_DIR}
+)
+
+# Link libraries
+target_link_libraries(test_${PROJECT_NAME} PRIVATE
+    mais
+    gtest_main
+)
+
+# Discover and register tests
+include(GoogleTest)
+gtest_discover_tests(test_${PROJECT_NAME})
