@@ -9,6 +9,9 @@ on:
 env:
   # Pinned so CI, the examples, and a developer machine agree on one version.
   PYTHON_VERSION: "3.13"
+  # Windows uses a multi-config generator, where CMAKE_BUILD_TYPE is ignored and
+  # CTest cannot run tests without -C. Both are driven by this one value.
+  BUILD_CONFIG: Release
 
 jobs:
   build:
@@ -42,19 +45,29 @@ jobs:
 
       - name: Configure CMake
         # pybind11 owns Python discovery and finds the interpreter first on
-        # PATH, which is the one the setup step installed.
+        # PATH, which is the one the setup step installed. CMAKE_BUILD_TYPE only
+        # applies to single-config generators; multi-config ones take the
+        # configuration at build time.
         run: >
           cmake -B ${{ github.workspace }}/build -S ${{ github.workspace }}
-          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_CONFIG }}
           -DBUILD_TESTING=ON
           -DBUILD_EXAMPLES=ON
 
       - name: Build
+        # --config is required by multi-config generators and ignored by
+        # single-config ones.
         run: >
           cmake --build ${{ github.workspace }}/build
+          --config ${{ env.BUILD_CONFIG }}
 
       - name: Run tests
+        # -C is required by multi-config generators. Without it CTest cannot
+        # resolve the test commands, and gtest_discover_tests() registers no
+        # tests at all, so the GoogleTest suite would be skipped rather than
+        # reported as failing.
         run: >
           ctest
           --test-dir ${{ github.workspace }}/build
+          -C ${{ env.BUILD_CONFIG }}
           --output-on-failure
