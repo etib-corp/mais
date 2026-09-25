@@ -6,6 +6,10 @@ INPUT                  = @HEADERS_DIR@ \
                          @CMAKE_SOURCE_DIR@/docs/ARCHITECTURE.md \
                          @CMAKE_SOURCE_DIR@/docs/GETTING_STARTED.md \
                          @CMAKE_SOURCE_DIR@/docs/ERROR_HANDLING.md \
+                         @CMAKE_SOURCE_DIR@/docs/ROADMAP.md \
+                         @CMAKE_SOURCE_DIR@/docs/MILESTONES.md \
+                         @CMAKE_SOURCE_DIR@/docs/TECHNICAL_CHOICES.md \
+                         @CMAKE_SOURCE_DIR@/docs/VERSIONING.md \
                          @CMAKE_SOURCE_DIR@/README.md
 RECURSIVE              = YES
 FILE_PATTERNS          = *.hpp *.md
