@@ -1,6 +1,7 @@
 # CMake build files
 build/
 .gradle
+*__pycache__*
 
 # Android example assets (large binaries, provided out of band)
 examples/OpenXR-android-base/app/assets/

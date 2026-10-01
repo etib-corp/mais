@@ -47,6 +47,15 @@ target_link_libraries(test_${PROJECT_NAME} PRIVATE
     gtest_main
 )
 
-# Discover and register tests
+# Run the whole suite as a single test as well, so it cannot be skipped
+# silently. gtest_discover_tests() writes nothing when discovery fails, and with
+# a multi-config generator used without `ctest -C` it registers no tests at all;
+# in either case CTest would otherwise report success with none of the unit
+# tests having run.
+add_test(NAME ${PROJECT_NAME}_unit_tests
+    COMMAND test_${PROJECT_NAME} --gtest_fail_if_no_test_linked
+)
+
+# Discover and register each test individually.
 include(GoogleTest)
 gtest_discover_tests(test_${PROJECT_NAME})
