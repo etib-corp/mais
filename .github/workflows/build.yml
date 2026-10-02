@@ -9,9 +9,11 @@ on:
 env:
   # Pinned so CI, the examples, and a developer machine agree on one version.
   PYTHON_VERSION: "3.13"
-  # Windows uses a multi-config generator, where CMAKE_BUILD_TYPE is ignored and
-  # CTest cannot run tests without -C. Both are driven by this one value.
-  BUILD_CONFIG: Release
+  # Multi-config generators (Visual Studio on Windows) ignore CMAKE_BUILD_TYPE.
+  # One value is threaded through configure, build, and CTest so all three
+  # agree; on single-config generators (Makefiles/Ninja) it is ignored where it
+  # does not apply.
+  BUILD_CONFIG: "Release"
 
 jobs:
   build:
@@ -55,11 +57,29 @@ jobs:
           -DBUILD_EXAMPLES=ON
 
       - name: Build
-        # --config is required by multi-config generators and ignored by
-        # single-config ones.
+        # --config selects the configuration on multi-config generators and is
+        # ignored by single-config ones.
         run: >
           cmake --build ${{ github.workspace }}/build
           --config ${{ env.BUILD_CONFIG }}
+
+      - name: Ensure tests were registered
+        # gtest_discover_tests() resolves its per-configuration include through
+        # the CTest configuration. Without -C it registers nothing on a
+        # multi-config generator, and a run with zero tests would still pass.
+        shell: bash
+        run: |
+          set -euo pipefail
+          # grep exits 1 on no match; tolerate it so the check below reports.
+          registered=$(ctest \
+            --test-dir "${{ github.workspace }}/build" \
+            -C "${{ env.BUILD_CONFIG }}" -N \
+            | grep -cE 'Test +#[0-9]+:' || true)
+          echo "Registered CTest tests: ${registered}"
+          if [ "${registered}" -eq 0 ]; then
+            echo "::error::No tests were registered; the test suite did not launch."
+            exit 1
+          fi
 
       - name: Run tests
         # -C is required by multi-config generators. Without it CTest cannot
