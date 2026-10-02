@@ -22,6 +22,13 @@ as part of this scripting library. 1.0.0 is the first release of this runtime.
 - `mais::Error`, `mais::ErrorCode`, `isOk`/`isRecoverable`/`isFatal`, and
   `mais::ScriptArgument`: every fallible operation reports a message plus a
   Python traceback instead of throwing or returning a bare Boolean.
+- `mais::ScriptArgument::native()`: a host passes a native facade to a hook
+  (`configure(settings)`, `on_update(context, dt)`) through a host-written
+  converter, so pybind11 stays out of the public headers. An unconvertible
+  object reports `InvalidArgument` or `TypeMismatch` instead of crashing, and
+  the object's lifetime rule is documented on the header.
+- A compile-only target proving every public header builds without pybind11 or
+  `Python.h`.
 - A standalone fake-host acceptance test: the host injects a C++ service,
   invokes a script that mutates it, and asserts on the reported traceback.
 - Lifecycle tests covering API misuse, single-owner-per-process enforcement,

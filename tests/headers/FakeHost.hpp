@@ -29,6 +29,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <string>
 #include <utility>
 
@@ -83,6 +84,85 @@ namespace mais_test
 				// must not outlive the counter.
 				host.attr("counter") = pybind11::cast(
 					&counter, pybind11::return_value_policy::reference);
+			});
+		ASSERT_TRUE(error.isOk()) << error.toString();
+	}
+
+	/// A configuration facade a script may read and edit; the host validates
+	/// it after the hook returns. Registered by bindFakeFacade() so it can be
+	/// passed to a hook as a native argument.
+	struct FakeSettings {
+		std::string title = "untitled";
+		int width		  = 640;
+		int height		  = 480;
+	};
+
+	/// Per-frame state a script may read and advance.
+	struct FakeContext {
+		std::uint64_t frame = 0;
+		double elapsed		= 0.0;
+	};
+
+	/// Records what a script read from a facade it was handed, so a test can
+	/// assert the script saw the host's own object rather than a copy.
+	struct FakeObserver {
+		const FakeSettings *lastSettings = nullptr;
+		int observedWidth				 = 0;
+		std::uint64_t observedFrame		 = 0;
+	};
+
+	/// Hands a FakeSettings to a hook without transferring ownership.
+	inline mais::ScriptArgument::NativeConverter settingsConverter()
+	{
+		return +[](const void *value) -> void * {
+			return pybind11::cast(static_cast<const FakeSettings *>(value),
+								  pybind11::return_value_policy::reference)
+				.release()
+				.ptr();
+		};
+	}
+
+	/// Hands a FakeContext to a hook without transferring ownership.
+	inline mais::ScriptArgument::NativeConverter contextConverter()
+	{
+		return +[](const void *value) -> void * {
+			return pybind11::cast(static_cast<const FakeContext *>(value),
+								  pybind11::return_value_policy::reference)
+				.release()
+				.ptr();
+		};
+	}
+
+	/// Registers a `facade` module exposing the types a hook can receive, and
+	/// the observer the fixture scripts report back through.
+	inline void bindFakeFacade(mais::ScriptRuntime &runtime,
+							   FakeObserver &observer)
+	{
+		mais::Error error = runtime.registerModule(
+			"facade", [&observer](mais::PythonModule &module) {
+				pybind11::module_ &facade = module.as<pybind11::module_>();
+				pybind11::class_<FakeSettings>(facade, "FakeSettings")
+					.def_readwrite("title", &FakeSettings::title)
+					.def_readwrite("width", &FakeSettings::width)
+					.def_readwrite("height", &FakeSettings::height);
+				pybind11::class_<FakeContext>(facade, "FakeContext")
+					.def_readwrite("frame", &FakeContext::frame)
+					.def_readwrite("elapsed", &FakeContext::elapsed);
+				pybind11::class_<FakeObserver>(facade, "FakeObserver")
+					.def("record_settings",
+						 [&observer](FakeObserver &,
+									 const FakeSettings &settings) {
+							 observer.lastSettings	= &settings;
+							 observer.observedWidth = settings.width;
+						 })
+					.def("record_context",
+						 [&observer](FakeObserver &,
+									 const FakeContext &context) {
+							 observer.observedFrame = context.frame;
+						 });
+				// The observer outlives the runtime, so Python only borrows it.
+				facade.attr("observer") = pybind11::cast(
+					&observer, pybind11::return_value_policy::reference);
 			});
 		ASSERT_TRUE(error.isOk()) << error.toString();
 	}

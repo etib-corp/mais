@@ -59,3 +59,11 @@ add_test(NAME ${PROJECT_NAME}_unit_tests
 # Discover and register each test individually.
 include(GoogleTest)
 gtest_discover_tests(test_${PROJECT_NAME})
+
+# The public headers must compile without pybind11 or Python.h. This target
+# deliberately sees only headers/ and links nothing, so an accidental pybind11
+# include in a public header fails the build here rather than at a consumer.
+add_library(${PROJECT_NAME}_public_headers OBJECT sources/test_public_headers.cpp)
+target_include_directories(${PROJECT_NAME}_public_headers PRIVATE
+    ${HEADERS_DIR}
+)

@@ -18,7 +18,7 @@ problem.
 | `ScriptNotFound`     | A search path is not an existing directory                   | Fix the path                   |
 | `ModuleNotFound`     | A module could not be imported, or was never loaded          | Load it first                  |
 | `FunctionNotFound`   | The module has no such function                              | Use `callOptional()` for hooks |
-| `TypeMismatch`       | A value could not be converted, or the attribute is not callable | Fix the argument or the script |
+| `TypeMismatch`       | A value could not be converted (including a native argument), or the attribute is not callable | Fix the argument or the script |
 | `InvocationFailed`   | The script raised a Python exception                          | Log `traceback()` and continue |
 
 Helpers: `isOk`, `isRecoverable`, `isFatal`, and `errorCodeName`.
@@ -74,6 +74,24 @@ if (error) {
 Tracebacks are best-effort. A failure with no Python frame (a failed import
 argument check, for example) still yields a message, and `hasTraceback()`
 reports which case you are in.
+
+## Native arguments
+
+`ScriptArgument::native()` hands a host-owned object to a call through a
+converter the host writes in a pybind11 translation unit. Conversion failures
+never crash and never leave a Python error set for the next call:
+
+| Situation                                   | `ErrorCode`                                          | Notes                                      |
+| ------------------------------------------- | ---------------------------------------------------- | ------------------------------------------ |
+| The argument has no converter               | `InvalidArgument`                                    | Rejected before any Python call            |
+| The converter returns no object             | `TypeMismatch`                                       | The host refused that value                |
+| The class was never registered by a binding | `TypeMismatch`                                       | pybind11 reports an unregistered type      |
+| The converter raises                        | `TypeMismatch`, or the classified Python error       | The message and traceback are preserved    |
+
+Every case is recoverable, so the host loop keeps running. The lifetime rule
+is the one in `ScriptRuntime`'s notes: maïs never takes ownership, but the
+wrapper it hands Python may outlive the call, so the host object must outlive
+the runtime.
 
 ## Errors versus exceptions
 

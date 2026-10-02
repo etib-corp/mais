@@ -1,25 +1,24 @@
 """Script driven by the standalone example host.
 
-The host injects ``host.settings`` and ``host.metrics`` before this module is
-imported, and calls the hooks it chooses to call.
+The host hands its settings and metrics objects to the hooks directly, so this
+module never imports the host bindings; it edits the configuration facade it
+receives and reads the per-frame state it is given.
 """
 
-import host
 
-
-def configure():
-    host.settings.window_title = "mais standalone host"
-    host.settings.width = 1280
-    host.settings.height = 720
+def configure(settings):
+    settings.window_title = "mais standalone host"
+    settings.width = 1280
+    settings.height = 720
 
 
 def on_start():
-    print("game: started", host.settings.window_title)
+    print("game: started")
 
 
-def on_update(delta_seconds):
-    host.metrics.frames += 1
+def on_update(metrics, delta_seconds):
+    metrics.frames += 1
 
 
-def on_shutdown():
-    print("game: shutting down after", host.metrics.frames, "frames")
+def on_shutdown(metrics):
+    print("game: shutting down after", metrics.frames, "frames")

@@ -53,6 +53,29 @@ namespace
 		double elapsedSeconds = 0.0;
 	};
 
+	/// Hand a host object to a hook without transferring ownership. maïs
+	/// borrows the address for the duration of the call, so the object keeps
+	/// outliving the runtime.
+	mais::ScriptArgument::NativeConverter settingsConverter()
+	{
+		return +[](const void *value) -> void * {
+			return py::cast(static_cast<const HostSettings *>(value),
+							py::return_value_policy::reference)
+				.release()
+				.ptr();
+		};
+	}
+
+	mais::ScriptArgument::NativeConverter metricsConverter()
+	{
+		return +[](const void *value) -> void * {
+			return py::cast(static_cast<const HostMetrics *>(value),
+							py::return_value_policy::reference)
+				.release()
+				.ptr();
+		};
+	}
+
 	[[nodiscard]] bool isUsable(const HostSettings &settings)
 	{
 		return !settings.windowTitle.empty() && settings.width > 0
@@ -77,9 +100,11 @@ int main(int argc, char **argv)
 	mais::ScriptRuntime runtime;
 
 	// Bindings are queued before Python starts.
-	mais::Error binding = runtime.registerModule(
-		"host", [&settings, &metrics](mais::PythonModule &module) {
+	mais::Error binding =
+		runtime.registerModule("host", [](mais::PythonModule &module) {
 			py::module_ &host = module.as<py::module_>();
+			// The classes must be registered before a host object can be passed
+			// as an argument; the objects themselves are handed to each hook.
 			py::class_<HostSettings>(host, "HostSettings")
 				.def_readwrite("window_title", &HostSettings::windowTitle)
 				.def_readwrite("width", &HostSettings::width)
@@ -87,11 +112,6 @@ int main(int argc, char **argv)
 			py::class_<HostMetrics>(host, "HostMetrics")
 				.def_readwrite("frames", &HostMetrics::frames)
 				.def_readwrite("elapsed_seconds", &HostMetrics::elapsedSeconds);
-			// Both objects outlive the runtime, so Python only borrows them.
-			host.attr("settings") =
-				py::cast(&settings, py::return_value_policy::reference);
-			host.attr("metrics") =
-				py::cast(&metrics, py::return_value_policy::reference);
 		});
 	if (binding) {
 		reportError(binding);
@@ -113,8 +133,12 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	// Hooks are optional: a script may implement none of them.
-	if (mais::Error error = runtime.callOptional("game", "configure"); error) {
+	// Hooks are optional: a script may implement none of them. The settings
+	// object is handed in, not imported from the bindings.
+	if (mais::Error error = runtime.callOptional(
+			"game", "configure",
+			{ mais::ScriptArgument::native(&settings, settingsConverter()) });
+		error) {
 		reportError(error);
 	}
 
@@ -138,13 +162,16 @@ int main(int argc, char **argv)
 		metrics.elapsedSeconds += deltaSeconds;
 		if (mais::Error error = runtime.callOptional(
 				"game", "on_update",
-				{ mais::ScriptArgument::number(deltaSeconds) });
+				{ mais::ScriptArgument::native(&metrics, metricsConverter()),
+				  mais::ScriptArgument::number(deltaSeconds) });
 			error) {
 			reportError(error);
 		}
 	}
 
-	if (mais::Error error = runtime.callOptional("game", "on_shutdown");
+	if (mais::Error error = runtime.callOptional(
+			"game", "on_shutdown",
+			{ mais::ScriptArgument::native(&metrics, metricsConverter()) });
 		error) {
 		reportError(error);
 	}
