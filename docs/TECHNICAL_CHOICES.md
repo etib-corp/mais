@@ -20,6 +20,7 @@ Do not require an `IEngine` interface in the generic scripting API for a single 
 - Start with a minimal vertical slice: expose one host-owned fake service to a script and invoke it from Python.
 - Choose embedded-module registration versus a separately built Python extension deliberately. Embedded pybind11 modules must be registered before Python initializes; separately built extensions need import-path and packaging rules.
 - Bind narrow, stable configuration and callback APIs rather than internal engine classes or a Python-side `Engine()` constructor that duplicates the host's engine.
+- Pass a host-owned object to a hook with `ScriptArgument::native()`: the argument carries the object's address and a host-written converter, so pybind11 stays out of `headers/mais/`. The runtime never takes ownership, the object must outlive the runtime, and its class must be registered by a binding callback before the call. Conversion failures return `InvalidArgument` or `TypeMismatch`, never a crash.
 - Define explicit return values, exception translation, and diagnostics for script calls. Preserve Python tracebacks.
 - Avoid exposing pybind11 types in public headers unless consumers truly need them; this reduces coupling and makes the package easier to evolve.
 
