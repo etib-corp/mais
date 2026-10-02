@@ -23,6 +23,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <initializer_list>
 #include <memory>
 #include <string>
@@ -35,9 +36,9 @@
 
 namespace mais
 {
-	/// \brief A single scalar argument passed to a script function.
+	/// \brief A single argument passed to a script function.
 	///
-	/// Values are built through the named factories so the Python type is
+	/// Scalars are built through the named factories so the Python type is
 	/// explicit at the call site instead of being guessed by overload
 	/// resolution:
 	///
@@ -45,9 +46,47 @@ namespace mais
 	/// runtime.call("game", "on_update",
 	/// {mais::ScriptArgument::number(delta)});
 	/// ```
+	///
+	/// A host-owned native object is passed with native(), which pairs the
+	/// object's address with a converter the host writes in a pybind11
+	/// translation unit. maïs never dereferences the address and never takes
+	/// ownership of the object.
 	class ScriptArgument
 	{
 		public:
+		/// \brief Produces the Python object representing a native argument.
+		///
+		/// `value` is the address handed to ScriptArgument::native(). The
+		/// converter must return a *new reference* to a Python object that
+		/// wraps that address without taking ownership of the C++ object, or
+		/// `nullptr` when the value cannot be represented. maïs takes
+		/// ownership of a non-null result.
+		///
+		/// The converter runs on the thread that called
+		/// ScriptRuntime::initialize(), with the GIL held, so it may use
+		/// pybind11 freely:
+		///
+		/// ```cpp
+		/// mais::ScriptArgument::NativeConverter converter =
+		///     +[](const void *value) -> void * {
+		///         return pybind11::cast(
+		///                    static_cast<const HostSettings *>(value),
+		///                    pybind11::return_value_policy::reference)
+		///             .release()
+		///             .ptr();
+		///     };
+		/// ```
+		using NativeConverter = std::function<void *(const void *)>;
+
+		/// \brief A host-owned object lent to one call.
+		struct NativeObject {
+			/// Address of the host object; maïs never dereferences it.
+			const void *value = nullptr;
+
+			/// Produces the Python object for `value`; see NativeConverter.
+			NativeConverter converter;
+		};
+
 		/// A Python `int`.
 		[[nodiscard]] static ScriptArgument integer(std::int64_t value);
 
@@ -60,15 +99,31 @@ namespace mais
 		/// A Python `str`.
 		[[nodiscard]] static ScriptArgument string(std::string value);
 
+		/// \brief A host-owned object, converted by `converter` at call time.
+		///
+		/// Lifetime: maïs never takes ownership. The converter runs only for
+		/// the duration of the call, but the Python wrapper it returns may
+		/// outlive the call, so `value` must outlive the runtime — the object
+		/// must be destroyed after ScriptRuntime::shutdown(). Its class must
+		/// already be registered by a binding callback, otherwise the call
+		/// fails with ErrorCode::TypeMismatch.
+		[[nodiscard]] static ScriptArgument native(const void *value,
+												   NativeConverter converter);
+
 		/// Payload type, one of `std::int64_t`, `double`, `bool`,
-		/// `std::string`.
-		using Value = std::variant<std::int64_t, double, bool, std::string>;
+		/// `std::string`, or NativeObject.
+		using Value =
+			std::variant<std::int64_t, double, bool, std::string, NativeObject>;
 
 		/// The stored payload.
 		[[nodiscard]] const Value &value() const noexcept;
 
-		/// Python type name of the payload, for diagnostics.
+		/// Python type name of the payload, for diagnostics. A native argument
+		/// reports "native".
 		[[nodiscard]] const char *typeName() const noexcept;
+
+		/// The native object when this argument is native, else nullptr.
+		[[nodiscard]] const NativeObject *nativeObject() const noexcept;
 
 		private:
 		explicit ScriptArgument(Value value);
@@ -103,6 +158,10 @@ namespace mais
 	/// shutdown() must run before those objects are destroyed. Expose a native
 	/// object with `pybind11::return_value_policy::reference` (or
 	/// `reference_internal`) so Python never takes ownership of a host object.
+	/// The same rule covers objects passed as arguments with
+	/// ScriptArgument::native(): the runtime borrows the address for one call,
+	/// but the wrapper it hands Python may keep referring to that address, so
+	/// the object must still outlive the runtime.
 	///
 	/// Threading
 	/// ---------
