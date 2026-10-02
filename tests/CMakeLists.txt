@@ -47,15 +47,6 @@ target_link_libraries(test_${PROJECT_NAME} PRIVATE
     gtest_main
 )
 
-# Run the whole suite as a single test as well, so it cannot be skipped
-# silently. gtest_discover_tests() writes nothing when discovery fails, and with
-# a multi-config generator used without `ctest -C` it registers no tests at all;
-# in either case CTest would otherwise report success with none of the unit
-# tests having run.
-add_test(NAME ${PROJECT_NAME}_unit_tests
-    COMMAND test_${PROJECT_NAME} --gtest_fail_if_no_test_linked
-)
-
 # Discover and register each test individually.
 include(GoogleTest)
 gtest_discover_tests(test_${PROJECT_NAME})
@@ -67,4 +58,12 @@ gtest_discover_tests(test_${PROJECT_NAME})
 # case, so a vanished discovery cannot pass the build silently.
 add_test(NAME mais_unit_tests
     COMMAND test_${PROJECT_NAME} --gtest_fail_if_no_test_linked
+)
+
+# The public headers must compile without pybind11 or Python.h. This target
+# deliberately sees only headers/ and links nothing, so an accidental pybind11
+# include in a public header fails the build here rather than at a consumer.
+add_library(${PROJECT_NAME}_public_headers OBJECT sources/test_public_headers.cpp)
+target_include_directories(${PROJECT_NAME}_public_headers PRIVATE
+    ${HEADERS_DIR}
 )
