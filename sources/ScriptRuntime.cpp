@@ -28,9 +28,11 @@
 #include <algorithm>
 #include <concepts>
 #include <cstdint>
+#include <cstddef>
 #include <exception>
 #include <filesystem>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -248,6 +250,87 @@ namespace mais
 			}
 		}
 
+		/// Converts one argument into the Python object to pass along.
+		/// \returns false and fills `error` when the argument cannot be
+		/// converted; `out` is untouched in that case.
+		bool convertArgument(const ScriptArgument &argument, std::size_t index,
+							 py::object &out, Error &error) const
+		{
+			const ScriptArgument::NativeObject *native =
+				argument.nativeObject();
+			if (native == nullptr) {
+				out = std::visit(
+					[](const auto &value) -> py::object {
+						using Payload = std::decay_t<decltype(value)>;
+						if constexpr (std::is_same_v<
+										  Payload,
+										  ScriptArgument::NativeObject>) {
+							// Native arguments are handled above.
+							return py::none();
+						} else {
+							return py::cast(value);
+						}
+					},
+					argument.value());
+				return true;
+			}
+
+			if (!native->converter) {
+				error = Error(ErrorCode::InvalidArgument,
+							  "argument " + std::to_string(index)
+								  + " is a native object but has no converter");
+				return false;
+			}
+
+			void *handle = nullptr;
+			try {
+				handle = native->converter(native->value);
+			} catch (py::error_already_set &pythonError) {
+				Error failure = fromPythonError(pythonError);
+				error		  = Error(failure.code(),
+									  "argument " + std::to_string(index)
+										  + " could not be converted to Python: "
+										  + failure.message(),
+									  failure.traceback());
+				return false;
+			} catch (const std::exception &conversionError) {
+				PyErr_Clear();
+				error = Error(ErrorCode::TypeMismatch,
+							  "argument " + std::to_string(index)
+								  + " could not be converted to Python: "
+								  + conversionError.what());
+				return false;
+			}
+
+			py::object converted;
+			if (handle != nullptr) {
+				converted = py::reinterpret_steal<py::object>(
+					reinterpret_cast<PyObject *>(handle));
+			}
+			if (!converted || PyErr_Occurred()) {
+				// Either the converter refused the value, or pybind11 left a
+				// Python error set — an unregistered class does exactly that.
+				// Fetch it now so it cannot leak into the next Python call.
+				if (PyErr_Occurred()) {
+					py::error_already_set pythonError;
+					Error failure = fromPythonError(pythonError);
+					error		  = Error(failure.code(),
+										  "argument " + std::to_string(index)
+											  + " could not be converted to Python: "
+											  + failure.message(),
+										  failure.traceback());
+					return false;
+				}
+				error = Error(ErrorCode::TypeMismatch,
+							  "argument " + std::to_string(index)
+								  + " (native) could not be converted to a "
+									"Python object");
+				return false;
+			}
+			out = std::move(converted);
+			return true;
+		}
+
 		/// Prepends `path` to `sys.path`; requires a live interpreter.
 		Error insertSearchPath(const std::string &path)
 		{
@@ -393,12 +476,26 @@ namespace mais
 					return outcome;
 				}
 
-				py::tuple packed(arguments.size());
+				// Convert every argument before touching Python so a failed
+				// conversion leaves no partially built tuple behind.
+				std::vector<py::object> converted;
+				converted.reserve(arguments.size());
 				for (std::size_t index = 0; index < arguments.size(); ++index) {
+					py::object object;
+					Error conversionFailure;
+					if (!convertArgument(arguments[index], index, object,
+										 conversionFailure)) {
+						return conversionFailure;
+					}
+					converted.push_back(std::move(object));
+				}
+
+				py::tuple packed(converted.size());
+				for (std::size_t index = 0; index < converted.size(); ++index) {
 					// PyTuple_SetItem steals the reference it is handed.
-					if (PyTuple_SetItem(
-							packed.ptr(), static_cast<Py_ssize_t>(index),
-							toPythonObject(arguments[index]).release().ptr())
+					if (PyTuple_SetItem(packed.ptr(),
+										static_cast<Py_ssize_t>(index),
+										converted[index].release().ptr())
 						!= 0) {
 						throw py::error_already_set();
 					}
@@ -496,9 +593,22 @@ namespace mais
 		return ScriptArgument(Value { std::move(value) });
 	}
 
+	ScriptArgument ScriptArgument::native(const void *value,
+										  NativeConverter converter)
+	{
+		return ScriptArgument(
+			Value { NativeObject { value, std::move(converter) } });
+	}
+
 	const ScriptArgument::Value &ScriptArgument::value() const noexcept
 	{
 		return _value;
+	}
+
+	const ScriptArgument::NativeObject *
+		ScriptArgument::nativeObject() const noexcept
+	{
+		return std::get_if<NativeObject>(&_value);
 	}
 
 	const char *ScriptArgument::typeName() const noexcept
@@ -512,6 +622,8 @@ namespace mais
 					return "float";
 				} else if constexpr (std::is_same_v<Payload, bool>) {
 					return "bool";
+				} else if constexpr (std::is_same_v<Payload, NativeObject>) {
+					return "native";
 				} else {
 					return "str";
 				}

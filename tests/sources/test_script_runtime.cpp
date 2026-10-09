@@ -28,6 +28,7 @@
 
 #include <cstdint>
 #include <stdexcept>
+#include <memory>
 #include <string>
 
 namespace
@@ -36,6 +37,23 @@ namespace
 	{
 		static const std::string directory = MAIS_TEST_SCRIPT_DIR;
 		return directory;
+	}
+
+	/// A type no binding registers, so converting it to Python must fail
+	/// rather than crash.
+	struct UnregisteredFacade {
+		int value = 7;
+	};
+
+	mais::ScriptArgument::NativeConverter unregisteredConverter()
+	{
+		return +[](const void *value) -> void * {
+			return pybind11::cast(
+					   static_cast<const UnregisteredFacade *>(value),
+					   pybind11::return_value_policy::reference)
+				.release()
+				.ptr();
+		};
 	}
 }	 // namespace
 
