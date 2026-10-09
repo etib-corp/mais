@@ -59,12 +59,3 @@ add_test(NAME ${PROJECT_NAME}_unit_tests
 # Discover and register each test individually.
 include(GoogleTest)
 gtest_discover_tests(test_${PROJECT_NAME})
-
-# Safety net: run the whole suite in a single process. gtest_discover_tests()
-# registers its tests at build time and, on a multi-config generator, resolves
-# them through the CTest configuration; if that resolution fails, CTest simply
-# sees no tests instead of erroring. This target always runs every linked GTest
-# case, so a vanished discovery cannot pass the build silently.
-add_test(NAME mais_unit_tests
-    COMMAND test_${PROJECT_NAME} --gtest_fail_if_no_test_linked
-)

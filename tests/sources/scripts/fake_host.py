@@ -21,7 +21,7 @@ def reset():
 
 
 def count():
-    return host.counter.count()
+    return host.counter.count
 
 
 def apply(label, enabled):
@@ -36,3 +36,27 @@ def explode():
 
 def divide(dividend, divisor):
     return dividend / divisor
+
+
+def flag():
+    return True
+
+
+def nothing():
+    return None
+
+
+def identity(value):
+    return value
+
+
+def label():
+    return "héllo maïs"
+
+
+def huge():
+    return 2 ** 80
+
+
+def mapping():
+    return {}
