@@ -68,16 +68,6 @@ namespace mais
 			return ErrorCode::InvocationFailed;
 		}
 
-		/// Converts a script argument into the Python object to pass along.
-		py::object toPythonObject(const ScriptArgument &argument)
-		{
-			return std::visit(
-				[](const auto &value) -> py::object {
-					return py::cast(value);
-				},
-				argument.value());
-		}
-
 		/// Result of converting one returned Python value to a C++ scalar.
 		enum class ConversionResult {
 			Converted,
@@ -485,7 +475,8 @@ namespace mais
 					Error conversionFailure;
 					if (!convertArgument(arguments[index], index, object,
 										 conversionFailure)) {
-						return conversionFailure;
+						outcome.error = std::move(conversionFailure);
+						return outcome;
 					}
 					converted.push_back(std::move(object));
 				}
