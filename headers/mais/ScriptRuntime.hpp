@@ -33,6 +33,7 @@
 
 #include "mais/BindingRegistry.hpp"
 #include "mais/Error.hpp"
+#include "mais/Result.hpp"
 
 namespace mais
 {
@@ -245,6 +246,34 @@ namespace mais
 		Error callOptional(std::string_view moduleName,
 						   std::string_view functionName,
 						   std::initializer_list<ScriptArgument> arguments);
+
+		/// \brief Calls `functionName` and reads its return value back as `T`.
+		///
+		/// `T` is one of bool, std::int64_t, double, or std::string. The
+		/// conversion is strict: a result of another Python type reports
+		/// TypeMismatch instead of converting silently, and a function that
+		/// returns None yields a result that isOk() without hasValue().
+		/// \returns FunctionNotFound when the function does not exist.
+		template<ScriptReturnType T> [[nodiscard]] Result<T>
+			call(std::string_view moduleName, std::string_view functionName);
+
+		/// Like call<T>(), passing `arguments` to the function.
+		template<ScriptReturnType T> [[nodiscard]] Result<T>
+			call(std::string_view moduleName, std::string_view functionName,
+				 std::initializer_list<ScriptArgument> arguments);
+
+		/// \brief Like call<T>(), but a function that does not exist is not an
+		/// error: the result isOk() without a value, just like a function that
+		/// returned None.
+		template<ScriptReturnType T>
+		[[nodiscard]] Result<T> callOptional(std::string_view moduleName,
+											 std::string_view functionName);
+
+		/// Like callOptional<T>(), passing `arguments` to the function.
+		template<ScriptReturnType T> [[nodiscard]] Result<T>
+			callOptional(std::string_view moduleName,
+						 std::string_view functionName,
+						 std::initializer_list<ScriptArgument> arguments);
 
 		private:
 		struct Impl;
