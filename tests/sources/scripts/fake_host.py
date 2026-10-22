@@ -6,6 +6,10 @@ imported.
 
 import host
 
+# A module-level attribute that is not callable: hasFunction() must report a
+# TypeMismatch, and listFunctions() must omit it.
+answer = 42
+
 
 def bump():
     host.counter.increment()
@@ -21,7 +25,7 @@ def reset():
 
 
 def count():
-    return host.counter.count()
+    return host.counter.count
 
 
 def apply(label, enabled):
@@ -46,3 +50,27 @@ def recurse(depth):
     if depth % 2:
         return recurse(depth - 1)
     return recurse(depth - 1)
+
+
+def flag():
+    return True
+
+
+def nothing():
+    return None
+
+
+def identity(value):
+    return value
+
+
+def label():
+    return "héllo maïs"
+
+
+def huge():
+    return 2 ** 80
+
+
+def mapping():
+    return {}
