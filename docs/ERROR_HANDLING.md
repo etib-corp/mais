@@ -17,8 +17,8 @@ problem.
 | `InvalidArgument`    | Empty name, empty binding callback, empty search path        | Fix the call                   |
 | `ScriptNotFound`     | A search path is not an existing directory                   | Fix the path                   |
 | `ModuleNotFound`     | A module could not be imported, or was never loaded          | Load it first                  |
-| `FunctionNotFound`   | The module has no such function                              | Use `callOptional()` for hooks |
-| `TypeMismatch`       | A value could not be converted (including a native argument), or the attribute is not callable | Fix the argument or the script |
+| `FunctionNotFound`   | The module has no such function                              | Use `callOptional()` for hooks, or `hasFunction()` to check without invoking |
+| `TypeMismatch`       | A value could not be converted (including a native argument), the attribute is not callable, or a returned value has the wrong type | Fix the argument or the script |
 | `InvocationFailed`   | The script raised a Python exception                          | Log `traceback()` and continue |
 
 Helpers: `isOk`, `isRecoverable`, `isFatal`, and `errorCodeName`.
@@ -30,7 +30,9 @@ Every fallible method returns `mais::Error`:
 - `ScriptRuntime::initialize()` / `shutdown()`
 - `ScriptRuntime::registerModule()`
 - `ScriptRuntime::addSearchPath()` / `loadModule()`
-- `ScriptRuntime::call()` / `callOptional()`
+- `ScriptRuntime::hasFunction()` / `listFunctions()`
+- `ScriptRuntime::call()` / `callOptional()`, and their typed
+  `call<T>()` / `callOptional<T>()` overloads
 
 A default-constructed `Error` is `Ok`, and `explicit operator bool()` reports
 failure, so the check reads the same way as `std::error_code`:
@@ -81,17 +83,97 @@ reports which case you are in.
 converter the host writes in a pybind11 translation unit. Conversion failures
 never crash and never leave a Python error set for the next call:
 
-| Situation                                   | `ErrorCode`                                          | Notes                                      |
-| ------------------------------------------- | ---------------------------------------------------- | ------------------------------------------ |
-| The argument has no converter               | `InvalidArgument`                                    | Rejected before any Python call            |
-| The converter returns no object             | `TypeMismatch`                                       | The host refused that value                |
-| The class was never registered by a binding | `TypeMismatch`                                       | pybind11 reports an unregistered type      |
-| The converter raises                        | `TypeMismatch`, or the classified Python error       | The message and traceback are preserved    |
+| Situation                                   | `ErrorCode` | Notes |
+| ------------------------------------------- | --- | --- |
+| The argument has no converter               | `InvalidArgument` | Rejected before any Python call |
+| The converter returns no object             | `TypeMismatch` | The host refused that value |
+| The class was never registered by a binding | `TypeMismatch` | pybind11 reports an unregistered type |
+| The converter raises                        | `TypeMismatch`, or the classified Python error | The message and traceback are preserved |
 
 Every case is recoverable, so the host loop keeps running. The lifetime rule
 is the one in `ScriptRuntime`'s notes: maïs never takes ownership, but the
 wrapper it hands Python may outlive the call, so the host object must outlive
 the runtime.
+
+## Typed return values
+
+The typed overloads `call<T>()` and `callOptional<T>()` read what a script
+returns; `T` is one of `bool`, `std::int64_t`, `double`, or `std::string`. The
+result is a `mais::Result<T>` with three states, still reported through
+`Error`:
+
+| Script outcome | `Result<T>` state | `error().code()` |
+| --- | --- | --- |
+| returns a `T` | `hasValue()` | `Ok` |
+| returns `None` | `isOk()` without a value | `Ok` |
+| hook missing (`callOptional<T>`) | `isOk()` without a value | `Ok` |
+| hook missing (`call<T>`) | no value | `FunctionNotFound` |
+| returns another type | no value | `TypeMismatch` |
+| raises | no value | `InvocationFailed` + traceback |
+
+`None` is therefore never confused with a failure: it means "the script has no
+opinion", and the host keeps its defaults. The conversion is strict — `True`
+and `False` are the only `bool`s, an `int` is not accepted for `double`, and a
+`float` is never truncated to an integer. A mismatch reports `TypeMismatch`
+whose message names the function, the returned type, and the requested one:
+
+```text
+'game.configure' returned float, but bool was requested
+```
+
+## Inspecting a module without running it
+
+`callOptional()` cannot answer "does this hook exist?" without running the
+hook: when it is present the probe executes it, and when it is absent the `Ok`
+result looks exactly like a hook that returned `None`. A host that needs the
+answer before invoking must use `hasFunction()`, which only reads the module
+namespace.
+
+```cpp
+mais::Result<bool> present = runtime.hasFunction("game", "on_start");
+if (!present.isOk()) {
+    log(present.error());          // ModuleNotFound, TypeMismatch, ...
+} else if (present.value()) {
+    mais::Error error = runtime.call("game", "on_start");  // exactly once
+    if (error) {
+        log(error);
+    }
+}
+```
+
+`hasFunction()` distinguishes the three namespace cases:
+
+| Namespace entry | Result |
+| --- | --- |
+| callable | `isOk()`, `value() == true` |
+| absent | `isOk()`, `value() == false` |
+| non-callable | `TypeMismatch`, the same `call()` reports |
+| module never loaded | `ModuleNotFound` |
+
+On success `hasValue()` is true for both `true` and `false`: an absent name is
+an answer, not a missing result.
+
+`listFunctions()` returns the public callables of a loaded module, sorted
+byte-wise so a console can render the list directly:
+
+```cpp
+mais::Result<std::vector<std::string>> hooks =
+    runtime.listFunctions("game");
+if (hooks.isOk()) {
+    for (const std::string &name: hooks.value()) {
+        console.add(name);
+    }
+}
+```
+
+The listing is a namespace view: non-callable attributes and names beginning
+with `_` are omitted, while a public callable imported into the module (for
+example `from math import sqrt`) appears. Introspection never invokes a value,
+never triggers a module-level `__getattr__` or `__dir__`, and never imports a
+module. Consequently, a callable supplied dynamically by `__getattr__` is
+reported absent even though `call()` may find it; that is the price of not
+running script code. Answers are snapshots: a later script call may change the
+namespace.
 
 ## Errors versus exceptions
 

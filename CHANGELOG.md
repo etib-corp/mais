@@ -15,6 +15,16 @@ as part of this scripting library. 1.0.0 is the first release of this runtime.
 - `mais::ScriptRuntime`, the host-facing entry point: interpreter lifecycle
   (`initialize()`/`shutdown()`), validated script search paths, module loading,
   and hook invocation through `call()` and `callOptional()`.
+- `mais::Result<T>` and typed `call<T>()` / `callOptional<T>()` overloads: a
+  script's `bool`, integer, float, or string return value can be read back
+  without changing the 1.0.0 signatures. A `None` result is a successful call
+  without a value, and a value of the wrong Python type reports `TypeMismatch`
+  instead of converting silently.
+- `mais::ScriptRuntime::hasFunction()` and `listFunctions()`: inspect a loaded
+  module's callable surface without invoking it, importing anything, or running
+  script code. `hasFunction()` reports `ModuleNotFound` for a module that was
+  never loaded and `TypeMismatch` for a present non-callable; `listFunctions()`
+  returns public callables sorted deterministically.
 - `mais::BindingRegistry` and `mais::PythonModule`: hosts queue embedded Python
   modules before the interpreter starts, and their callbacks run once Python is
   live. This replaces `PYBIND11_EMBEDDED_MODULE` for embedded hosts, so no
