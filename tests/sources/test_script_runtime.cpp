@@ -26,10 +26,12 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -227,6 +229,199 @@ TEST(OptionalHookTest, ReportsCallingAModuleThatWasNeverLoaded)
 	EXPECT_FALSE(runtime.isModuleLoaded("fake_host"));
 }
 
+TEST(IntrospectionTest, ReportsPresentFunctionsWithoutInvokingThem)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeCounter counter("introspection-present");
+
+	mais_test::bindFakeHost(runtime, counter);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+
+	mais::Result<bool> bump = runtime.hasFunction("fake_host", "bump");
+	ASSERT_TRUE(bump.isOk()) << bump.error().toString();
+	ASSERT_TRUE(bump.hasValue());
+	EXPECT_TRUE(bump.value());
+
+	// Introspection is not invocation: bump() would have incremented it.
+	EXPECT_EQ(counter.count(), 0);
+
+	mais::Result<std::vector<std::string>> names =
+		runtime.listFunctions("fake_host");
+	ASSERT_TRUE(names.isOk()) << names.error().toString();
+	ASSERT_TRUE(names.hasValue());
+	EXPECT_NE(std::find(names.value().begin(), names.value().end(), "bump"),
+			  names.value().end());
+	EXPECT_EQ(std::find(names.value().begin(), names.value().end(), "on_start"),
+			  names.value().end());
+	EXPECT_EQ(counter.count(), 0);
+}
+
+TEST(IntrospectionTest, ReportsAbsentFunctionsAsFalse)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeCounter counter("introspection-absent");
+
+	mais_test::bindFakeHost(runtime, counter);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+
+	mais::Result<bool> missing = runtime.hasFunction("fake_host", "on_start");
+	ASSERT_TRUE(missing.isOk()) << missing.error().toString();
+	ASSERT_TRUE(missing.hasValue());
+	EXPECT_FALSE(missing.value());
+	EXPECT_EQ(counter.count(), 0);
+
+	mais::Result<std::vector<std::string>> names =
+		runtime.listFunctions("fake_host");
+	ASSERT_TRUE(names.isOk()) << names.error().toString();
+	EXPECT_EQ(std::find(names.value().begin(), names.value().end(), "on_start"),
+			  names.value().end());
+}
+
+TEST(IntrospectionTest, ReportsNonCallableAttributes)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeCounter counter("introspection-non-callable");
+
+	mais_test::bindFakeHost(runtime, counter);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+
+	mais::Result<bool> answer = runtime.hasFunction("fake_host", "answer");
+	ASSERT_FALSE(answer.isOk());
+	EXPECT_EQ(answer.error().code(), mais::ErrorCode::TypeMismatch);
+	EXPECT_NE(answer.error().message().find("answer"), std::string::npos);
+	EXPECT_NE(answer.error().message().find("not callable"), std::string::npos);
+
+	mais::Result<std::vector<std::string>> names =
+		runtime.listFunctions("fake_host");
+	ASSERT_TRUE(names.isOk()) << names.error().toString();
+	EXPECT_EQ(std::find(names.value().begin(), names.value().end(), "answer"),
+			  names.value().end());
+
+	// A host binding exposes both a callable class and a non-callable object.
+	mais::Result<bool> instance = runtime.hasFunction("host", "counter");
+	ASSERT_FALSE(instance.isOk());
+	EXPECT_EQ(instance.error().code(), mais::ErrorCode::TypeMismatch);
+
+	mais::Result<bool> hostClass = runtime.hasFunction("host", "FakeCounter");
+	ASSERT_TRUE(hostClass.isOk()) << hostClass.error().toString();
+	EXPECT_TRUE(hostClass.value());
+}
+
+TEST(IntrospectionTest, ReportsModulesThatWereNeverLoaded)
+{
+	mais::ScriptRuntime runtime;
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+
+	// broken_module raises at import time. Answering ModuleNotFound proves
+	// introspection did not try to import it.
+	mais::Result<bool> query = runtime.hasFunction("broken_module", "anything");
+	ASSERT_FALSE(query.isOk());
+	EXPECT_EQ(query.error().code(), mais::ErrorCode::ModuleNotFound);
+
+	mais::Result<std::vector<std::string>> listing =
+		runtime.listFunctions("broken_module");
+	ASSERT_FALSE(listing.isOk());
+	EXPECT_EQ(listing.error().code(), mais::ErrorCode::ModuleNotFound);
+	EXPECT_FALSE(runtime.isModuleLoaded("broken_module"));
+}
+
+TEST(IntrospectionTest, RequiresInitializationAndNames)
+{
+	mais::ScriptRuntime runtime;
+
+	EXPECT_EQ(runtime.hasFunction("fake_host", "bump").error().code(),
+			  mais::ErrorCode::NotInitialized);
+	EXPECT_EQ(runtime.listFunctions("fake_host").error().code(),
+			  mais::ErrorCode::NotInitialized);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+
+	EXPECT_EQ(runtime.hasFunction("", "bump").error().code(),
+			  mais::ErrorCode::InvalidArgument);
+	EXPECT_EQ(runtime.hasFunction("fake_host", "").error().code(),
+			  mais::ErrorCode::InvalidArgument);
+	EXPECT_EQ(runtime.listFunctions("").error().code(),
+			  mais::ErrorCode::InvalidArgument);
+}
+
+TEST(IntrospectionTest, ListsPublicCallablesInDeterministicOrder)
+{
+	mais::ScriptRuntime runtime;
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("hook_surface").isOk());
+
+	mais::Result<std::vector<std::string>> names =
+		runtime.listFunctions("hook_surface");
+	ASSERT_TRUE(names.isOk()) << names.error().toString();
+	ASSERT_TRUE(names.hasValue());
+
+	// Tool (callable class) and sqrt (imported callable) are part of the
+	// namespace view; private and non-callable names are not.
+	const std::vector<std::string> expected = { "Tool", "on_start", "on_update",
+												"sqrt" };
+	EXPECT_EQ(names.value(), expected);
+
+	mais::Result<std::vector<std::string>> again =
+		runtime.listFunctions("hook_surface");
+	ASSERT_TRUE(again.isOk()) << again.error().toString();
+	EXPECT_EQ(again.value(), expected);
+
+	// hasFunction() is not filtered: private and dunder names stay queryable.
+	mais::Result<bool> hidden = runtime.hasFunction("hook_surface", "_hidden");
+	ASSERT_TRUE(hidden.isOk()) << hidden.error().toString();
+	EXPECT_TRUE(hidden.value());
+
+	mais::Result<bool> dunder =
+		runtime.hasFunction("hook_surface", "__getattr__");
+	ASSERT_TRUE(dunder.isOk()) << dunder.error().toString();
+	EXPECT_TRUE(dunder.value());
+
+	// Missing names are absent, not an error, and must not reach __getattr__.
+	mais::Result<bool> missing =
+		runtime.hasFunction("hook_surface", "dynamic_hook");
+	ASSERT_TRUE(missing.isOk()) << missing.error().toString();
+	ASSERT_TRUE(missing.hasValue());
+	EXPECT_FALSE(missing.value());
+
+	// The hook exists but would raise if introspection invoked it.
+	mais::Result<bool> present =
+		runtime.hasFunction("hook_surface", "on_start");
+	ASSERT_TRUE(present.isOk()) << present.error().toString();
+	EXPECT_TRUE(present.value());
+}
+
+TEST(IntrospectionTest, ReturnsAnEmptyListingForAModuleWithoutCallables)
+{
+	mais::ScriptRuntime runtime;
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("empty_module").isOk());
+
+	mais::Result<std::vector<std::string>> names =
+		runtime.listFunctions("empty_module");
+	ASSERT_TRUE(names.isOk()) << names.error().toString();
+	ASSERT_TRUE(names.hasValue());
+	EXPECT_TRUE(names.value().empty());
+
+	mais::Result<bool> answer = runtime.hasFunction("empty_module", "answer");
+	ASSERT_FALSE(answer.isOk());
+	EXPECT_EQ(answer.error().code(), mais::ErrorCode::TypeMismatch);
+}
+
 TEST(ScriptLoadingTest, ReportsMissingModules)
 {
 	mais::ScriptRuntime runtime;
@@ -352,6 +547,157 @@ TEST(BindingTest, RejectsUnusableRegistrations)
 	EXPECT_EQ(runtime.registerModule("host", {}).code(),
 			  mais::ErrorCode::InvalidArgument);
 	EXPECT_TRUE(runtime.bindings().empty());
+}
+
+/// A host hands a native facade to a hook and the script mutates it.
+TEST(NativeArgumentTest, LetsAScriptMutateAHostOwnedFacade)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeObserver observer;
+	mais_test::FakeSettings settings;
+
+	mais_test::bindFakeFacade(runtime, observer);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("native_args").isOk());
+
+	mais::Error error =
+		runtime.call("native_args", "configure",
+					 { mais::ScriptArgument::native(
+						 &settings, mais_test::settingsConverter()) });
+
+	ASSERT_TRUE(error.isOk()) << error.toString();
+	EXPECT_EQ(settings.title, "configured by script");
+	EXPECT_EQ(settings.width, 1280);
+	EXPECT_EQ(settings.height, 720);
+	ASSERT_TRUE(runtime.shutdown().isOk());
+}
+
+/// A host hands a native facade to a hook and the script reads it back,
+/// still referring to the host's own object.
+TEST(NativeArgumentTest, LetsAScriptReadTheHostObjectBack)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeObserver observer;
+	mais_test::FakeSettings settings;
+
+	mais_test::bindFakeFacade(runtime, observer);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("native_args").isOk());
+
+	settings.width = 1920;
+	mais::Error error =
+		runtime.call("native_args", "observe_settings",
+					 { mais::ScriptArgument::native(
+						 &settings, mais_test::settingsConverter()) });
+
+	ASSERT_TRUE(error.isOk()) << error.toString();
+	EXPECT_EQ(observer.lastSettings, &settings);
+	EXPECT_EQ(observer.observedWidth, 1920);
+}
+
+/// Native and scalar arguments keep their order within one call.
+TEST(NativeArgumentTest, PassesNativeAndScalarArgumentsInOrder)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeObserver observer;
+	mais_test::FakeContext context;
+
+	mais_test::bindFakeFacade(runtime, observer);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("native_args").isOk());
+
+	mais::Error error = runtime.call(
+		"native_args", "observe_context",
+		{ mais::ScriptArgument::native(&context, mais_test::contextConverter()),
+		  mais::ScriptArgument::number(0.5) });
+
+	ASSERT_TRUE(error.isOk()) << error.toString();
+	EXPECT_EQ(context.frame, 1U);
+	EXPECT_DOUBLE_EQ(context.elapsed, 0.5);
+	EXPECT_EQ(observer.observedFrame, 1U);
+}
+
+/// An object the runtime cannot convert fails with TypeMismatch, never a
+/// crash, and leaves the runtime usable.
+TEST(NativeArgumentTest, ReportsAnObjectThatCannotBeConverted)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeCounter counter("native-errors");
+	UnregisteredFacade facade;
+
+	mais_test::bindFakeHost(runtime, counter);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+
+	mais::Error error = runtime.call(
+		"fake_host", "bump",
+		{ mais::ScriptArgument::native(&facade, unregisteredConverter()) });
+
+	ASSERT_FALSE(error.isOk());
+	EXPECT_EQ(error.code(), mais::ErrorCode::TypeMismatch);
+	EXPECT_TRUE(mais::isRecoverable(error.code()));
+	EXPECT_NE(error.message().find("argument 0"), std::string::npos);
+	EXPECT_TRUE(runtime.isRunning());
+
+	mais::Error followUp = runtime.call("fake_host", "bump");
+	ASSERT_TRUE(followUp.isOk()) << followUp.toString();
+	EXPECT_EQ(counter.count(), 1);
+}
+
+/// A native argument without a converter is rejected before any Python call.
+TEST(NativeArgumentTest, RejectsANativeArgumentWithoutAConverter)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeObserver observer;
+	mais_test::FakeSettings settings;
+
+	mais_test::bindFakeFacade(runtime, observer);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("native_args").isOk());
+
+	mais::Error error =
+		runtime.call("native_args", "configure",
+					 { mais::ScriptArgument::native(&settings, {}) });
+
+	ASSERT_FALSE(error.isOk());
+	EXPECT_EQ(error.code(), mais::ErrorCode::InvalidArgument);
+	EXPECT_NE(error.message().find("argument 0"), std::string::npos);
+}
+
+/// The lifetime contract: the runtime may be destroyed before the host object
+/// it borrowed, because shutdown() releases every Python wrapper first.
+TEST(NativeArgumentTest, OutlivesTheRuntimeThatBorrowedIt)
+{
+	auto settings = std::make_unique<mais_test::FakeSettings>();
+	{
+		mais::ScriptRuntime runtime;
+		mais_test::FakeObserver observer;
+
+		mais_test::bindFakeFacade(runtime, observer);
+
+		ASSERT_TRUE(runtime.initialize().isOk());
+		ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+		ASSERT_TRUE(runtime.loadModule("native_args").isOk());
+		ASSERT_TRUE(
+			runtime
+				.call("native_args", "configure",
+					  { mais::ScriptArgument::native(
+						  settings.get(), mais_test::settingsConverter()) })
+				.isOk());
+		ASSERT_TRUE(runtime.shutdown().isOk());
+	}
+	// The runtime is gone; the host object is intact and still usable.
+	EXPECT_EQ(settings->width, 1280);
 }
 
 TEST(TypedReturnTest, ReadsABoolean)

@@ -6,6 +6,10 @@ imported.
 
 import host
 
+# A module-level attribute that is not callable: hasFunction() must report a
+# TypeMismatch, and listFunctions() must omit it.
+answer = 42
+
 
 def bump():
     host.counter.increment()

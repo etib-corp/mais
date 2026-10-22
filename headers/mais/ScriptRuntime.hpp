@@ -228,6 +228,38 @@ namespace mais
 		/// a host binding.
 		[[nodiscard]] bool isModuleLoaded(const std::string &moduleName) const;
 
+		// -- Introspection ---------------------------------------------------
+
+		/// \brief True when `moduleName` exposes a callable named
+		/// `functionName`.
+		///
+		/// Reads the module namespace directly, so it never invokes the value,
+		/// never triggers a module-level `__getattr__` or `__dir__`, and never
+		/// imports anything. An absent name is Ok with value false. A name
+		/// bound to a non-callable value reports TypeMismatch, like call(), so
+		/// a host can distinguish "not implemented" from "implemented
+		/// incorrectly". A callable supplied dynamically by a module-level
+		/// `__getattr__` is reported absent; introspection never runs script
+		/// code.
+		/// \returns NotInitialized, InvalidArgument, ModuleNotFound when the
+		/// module was never loaded, or TypeMismatch when the name is not
+		/// callable.
+		[[nodiscard]] Result<bool>
+			hasFunction(std::string_view moduleName,
+						std::string_view functionName) const;
+
+		/// \brief Names of the public callables in a loaded module, sorted.
+		///
+		/// "Public" means the name does not start with `_`, so dunder
+		/// attributes and private helpers stay out of a console listing.
+		/// Values that are not callable are omitted. The result is a namespace
+		/// view: a public callable imported into the module appears too.
+		/// Ordering is byte-wise ascending, independent of the platform locale.
+		/// \returns NotInitialized, InvalidArgument, or ModuleNotFound when the
+		/// module was never loaded.
+		[[nodiscard]] Result<std::vector<std::string>>
+			listFunctions(std::string_view moduleName) const;
+
 		// -- Invocation ------------------------------------------------------
 
 		/// Calls `functionName` in `moduleName` with no arguments.

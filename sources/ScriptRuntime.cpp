@@ -146,6 +146,38 @@ namespace mais
 			return Py_TYPE(value.ptr())->tp_name;
 		}
 
+		/// State of a name in a module namespace.
+		enum class NamespaceEntry {
+			Absent,
+			NotCallable,
+			Callable,
+		};
+
+		/// \brief Looks a name up directly in a module's dictionary.
+		///
+		/// Deliberately bypasses getattr: a module-level __getattr__ is script
+		/// code, and introspection must not run any. The lookup also avoids
+		/// dir(), which may call a script-defined __dir__.
+		NamespaceEntry namespaceEntry(PyObject *namespaceObject,
+									  std::string_view name)
+		{
+			py::object key =
+				py::reinterpret_steal<py::object>(PyUnicode_FromStringAndSize(
+					name.data(), static_cast<Py_ssize_t>(name.size())));
+			if (!key) {
+				// Not representable as Python text, so no key can match it.
+				PyErr_Clear();
+				return NamespaceEntry::Absent;
+			}
+
+			PyObject *value = PyDict_GetItem(namespaceObject, key.ptr());
+			if (value == nullptr) {
+				return NamespaceEntry::Absent;
+			}
+			return PyCallable_Check(value) != 0 ? NamespaceEntry::Callable
+												: NamespaceEntry::NotCallable;
+		}
+
 		/// Name of the requested type, the way a script author writes it.
 		template<typename T> const char *expectedTypeName()
 		{
@@ -409,9 +441,26 @@ namespace mais
 			py::object value;
 		};
 
-		/// Shared argument checks for every call() overload.
-		[[nodiscard]] Error validateCall(std::string_view moduleName,
-										 std::string_view functionName) const
+		/// \brief Finds a module loaded by loadModule() or a host binding.
+		///
+		/// Fills `error` with the same ModuleNotFound report call() uses, so
+		/// invocation and introspection cannot drift apart.
+		[[nodiscard]] py::module_ *findLoadedModule(std::string_view moduleName,
+													Error &error)
+		{
+			auto module = modules.find(std::string(moduleName));
+
+			if (module == modules.end()) {
+				error = Error(ErrorCode::ModuleNotFound,
+							  "script module '" + std::string(moduleName)
+								  + "' is not loaded; call loadModule() first");
+				return nullptr;
+			}
+			return &module->second;
+		}
+
+		/// Shared module checks for calls and introspection queries.
+		[[nodiscard]] Error validateModule(std::string_view moduleName) const
 		{
 			if (!running) {
 				return Error(ErrorCode::NotInitialized,
@@ -420,6 +469,18 @@ namespace mais
 			if (moduleName.empty()) {
 				return Error(ErrorCode::InvalidArgument,
 							 "module name is empty");
+			}
+			return Error::ok();
+		}
+
+		/// Shared argument checks for every call() overload.
+		[[nodiscard]] Error validateCall(std::string_view moduleName,
+										 std::string_view functionName) const
+		{
+			Error invalid = validateModule(moduleName);
+
+			if (invalid) {
+				return invalid;
 			}
 			if (functionName.empty()) {
 				return Error(ErrorCode::InvalidArgument,
@@ -439,17 +500,18 @@ namespace mais
 		{
 			CallOutcome outcome;
 			try {
-				auto module = modules.find(moduleKey);
-				if (module == modules.end()) {
-					outcome.error =
-						Error(ErrorCode::ModuleNotFound,
-							  "script module '" + moduleKey
-								  + "' is not loaded; call loadModule() first");
+				Error lookupFailure;
+				py::module_ *module =
+					findLoadedModule(moduleKey, lookupFailure);
+
+				if (module == nullptr) {
+					outcome.error = std::move(lookupFailure);
 					return outcome;
 				}
 
-				py::object function = py::getattr(
-					module->second, functionKey.c_str(), py::none());
+				py::object function =
+					py::getattr(*module, functionKey.c_str(), py::none());
+
 				if (function.is_none()) {
 					if (!optional) {
 						outcome.error =
@@ -469,6 +531,7 @@ namespace mais
 				// Convert every argument before touching Python so a failed
 				// conversion leaves no partially built tuple behind.
 				std::vector<py::object> converted;
+
 				converted.reserve(arguments.size());
 				for (std::size_t index = 0; index < arguments.size(); ++index) {
 					py::object object;
@@ -482,6 +545,7 @@ namespace mais
 				}
 
 				py::tuple packed(converted.size());
+
 				for (std::size_t index = 0; index < converted.size(); ++index) {
 					// PyTuple_SetItem steals the reference it is handed.
 					if (PyTuple_SetItem(packed.ptr(),
@@ -785,6 +849,107 @@ namespace mais
 	bool ScriptRuntime::isModuleLoaded(const std::string &moduleName) const
 	{
 		return _impl->modules.find(moduleName) != _impl->modules.end();
+	}
+
+	Result<bool> ScriptRuntime::hasFunction(std::string_view moduleName,
+											std::string_view functionName) const
+	{
+		Error invalid = _impl->validateCall(moduleName, functionName);
+
+		if (invalid) {
+			return Result<bool>(std::move(invalid));
+		}
+
+		py::gil_scoped_acquire gil;
+		Error lookupFailure;
+		py::module_ *module =
+			_impl->findLoadedModule(moduleName, lookupFailure);
+
+		if (module == nullptr) {
+			return Result<bool>(std::move(lookupFailure));
+		}
+
+		PyObject *namespaceObject = PyModule_GetDict(module->ptr());
+		if (namespaceObject == nullptr) {
+			PyErr_Clear();
+			return Result<bool>(Error(ErrorCode::InterpreterFailure,
+									  "module '" + std::string(moduleName)
+										  + "' has no namespace"));
+		}
+
+		switch (namespaceEntry(namespaceObject, functionName)) {
+			case NamespaceEntry::Absent:
+				return Result<bool>(false);
+			case NamespaceEntry::NotCallable:
+				return Result<bool>(Error(ErrorCode::TypeMismatch,
+										  "'" + std::string(moduleName) + "."
+											  + std::string(functionName)
+											  + "' is not callable"));
+			case NamespaceEntry::Callable:
+			default:
+				return Result<bool>(true);
+		}
+	}
+
+	Result<std::vector<std::string>>
+		ScriptRuntime::listFunctions(std::string_view moduleName) const
+	{
+		Error invalid = _impl->validateModule(moduleName);
+
+		if (invalid) {
+			return Result<std::vector<std::string>>(std::move(invalid));
+		}
+
+		py::gil_scoped_acquire gil;
+		Error lookupFailure;
+		py::module_ *module =
+			_impl->findLoadedModule(moduleName, lookupFailure);
+
+		if (module == nullptr) {
+			return Result<std::vector<std::string>>(std::move(lookupFailure));
+		}
+
+		PyObject *namespaceObject = PyModule_GetDict(module->ptr());
+		if (namespaceObject == nullptr) {
+			PyErr_Clear();
+			return Result<std::vector<std::string>>(Error(
+				ErrorCode::InterpreterFailure,
+				"module '" + std::string(moduleName) + "' has no namespace"));
+		}
+
+		std::vector<std::string> names;
+		Py_ssize_t position = 0;
+
+		PyObject *key	= nullptr;
+		PyObject *value = nullptr;
+		while (PyDict_Next(namespaceObject, &position, &key, &value)) {
+			// Non-string keys can only come from direct dict manipulation;
+			// they are not addressable as functions.
+			if (!PyUnicode_Check(key) || !PyCallable_Check(value)) {
+				continue;
+			}
+
+			Py_ssize_t size	 = 0;
+			const char *text = PyUnicode_AsUTF8AndSize(key, &size);
+
+			if (text == nullptr) {
+				// A string that cannot be encoded as UTF-8 cannot be passed to
+				// call() either; skip it rather than failing the whole list.
+				PyErr_Clear();
+				continue;
+			}
+
+			std::string name(text, static_cast<std::size_t>(size));
+
+			if (name.empty() || name.front() == '_') {
+				continue;
+			}
+			names.push_back(std::move(name));
+		}
+
+		// A console must render the same order on every run and platform.
+		std::sort(names.begin(), names.end());
+		return Result<std::vector<std::string>>(std::move(names));
 	}
 
 	Error ScriptRuntime::call(std::string_view moduleName,
