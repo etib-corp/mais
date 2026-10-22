@@ -36,3 +36,13 @@ def explode():
 
 def divide(dividend, divisor):
     return dividend / divisor
+
+
+def recurse(depth):
+    if depth <= 0:
+        raise ValueError("deep boom")
+    # Alternate lines so CPython's repeated-frame folding does not hide the
+    # depth in the formatted traceback.
+    if depth % 2:
+        return recurse(depth - 1)
+    return recurse(depth - 1)

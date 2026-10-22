@@ -25,10 +25,14 @@
 #include <pybind11/embed.h>
 #include <pybind11/pybind11.h>
 
+#include <frameobject.h>
+
 #include <algorithm>
 #include <cstddef>
+#include <deque>
 #include <exception>
 #include <filesystem>
+#include <iterator>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -49,6 +53,88 @@ namespace mais
 			} catch (const std::exception &) {
 				return "PythonError";
 			}
+		}
+
+		/// Converts a Python string to UTF-8; empty when it is not one.
+		std::string unicodeToUtf8(PyObject *object)
+		{
+			if (object == nullptr || !PyUnicode_Check(object)) {
+				return {};
+			}
+
+			Py_ssize_t size	 = 0;
+			const char *text = PyUnicode_AsUTF8AndSize(object, &size);
+
+			if (text == nullptr) {
+				PyErr_Clear();
+				return {};
+			}
+			return std::string(text, static_cast<std::size_t>(size));
+		}
+
+		/// Copies frames out of the traceback pybind11 already captured.
+		/// Keeps the innermost Error::maxFrames frames, outermost first.
+		std::vector<Error::Frame>
+			extractFrames(const py::error_already_set &error)
+		{
+			try {
+				const py::object &trace = error.trace();
+
+				if (!trace || !PyTraceBack_Check(trace.ptr())) {
+					return {};
+				}
+
+				std::deque<Error::Frame> frames;
+
+				for (PyTracebackObject *entry =
+						 reinterpret_cast<PyTracebackObject *>(trace.ptr());
+					 entry != nullptr; entry = entry->tb_next) {
+					Error::Frame frame;
+					// Python 3.14 stores -1 and resolves the line lazily,
+					// exactly as the tb_lineno getter does.
+					int line = entry->tb_lineno;
+
+					if (entry->tb_frame != nullptr) {
+						py::object code = py::reinterpret_steal<py::object>(
+							reinterpret_cast<PyObject *>(
+								PyFrame_GetCode(entry->tb_frame)));
+
+						if (code) {
+							auto *codeObject =
+								reinterpret_cast<PyCodeObject *>(code.ptr());
+
+							frame.file = unicodeToUtf8(codeObject->co_filename);
+							frame.function = unicodeToUtf8(codeObject->co_name);
+							if (line < 0) {
+								line = PyCode_Addr2Line(codeObject,
+														entry->tb_lasti);
+							}
+						}
+					}
+					if (line > 0) {
+						frame.line = static_cast<std::size_t>(line);
+					}
+					frames.push_back(std::move(frame));
+					if (frames.size() > Error::maxFrames) {
+						frames.pop_front();
+					}
+				}
+				return { std::make_move_iterator(frames.begin()),
+						 std::make_move_iterator(frames.end()) };
+			} catch (const std::exception &) {
+				// Frames are best-effort; the error message still stands.
+				PyErr_Clear();
+				return {};
+			}
+		}
+
+		/// Rebuilds `failure` with a host-facing message while preserving
+		/// every Python diagnostic it carries.
+		Error withDiagnostics(const Error &failure, std::string message)
+		{
+			return Error(failure.code(), std::move(message),
+						 failure.traceback(), failure.exceptionType(),
+						 failure.frames());
 		}
 
 		/// Maps a Python exception to the closest maïs error code.
@@ -87,16 +173,20 @@ namespace mais
 		/// reporting a failure never imports anything while handling one.
 		py::object tracebackModule;
 
-		/// Builds an Error carrying the Python message and traceback.
+		/// Builds an Error carrying the Python message, traceback, exception
+		/// type, and structured frames.
 		[[nodiscard]] Error
 			fromPythonError(const py::error_already_set &error) const
 		{
-			const ErrorCode code = classifyPythonError(error);
-			std::string message	 = error.what();
+			const ErrorCode code	  = classifyPythonError(error);
+			std::string exceptionType = pythonErrorTypeName(error);
+			std::string message		  = error.what();
+
 			if (message.empty()) {
-				message = "Python raised " + pythonErrorTypeName(error);
+				message = "Python raised " + exceptionType;
 			}
-			return Error(code, std::move(message), formatTraceback(error));
+			return Error(code, std::move(message), formatTraceback(error),
+						 std::move(exceptionType), extractFrames(error));
 		}
 
 		/// Formats the exception pybind11 already captured, without touching
@@ -155,11 +245,12 @@ namespace mais
 				handle = native->converter(native->value);
 			} catch (py::error_already_set &pythonError) {
 				Error failure = fromPythonError(pythonError);
-				error		  = Error(failure.code(),
-									  "argument " + std::to_string(index)
-										  + " could not be converted to Python: "
-										  + failure.message(),
-									  failure.traceback());
+
+				error =
+					withDiagnostics(failure,
+									"argument " + std::to_string(index)
+										+ " could not be converted to Python: "
+										+ failure.message());
 				return false;
 			} catch (const std::exception &conversionError) {
 				PyErr_Clear();
@@ -182,11 +273,12 @@ namespace mais
 				if (PyErr_Occurred()) {
 					py::error_already_set pythonError;
 					Error failure = fromPythonError(pythonError);
-					error		  = Error(failure.code(),
-										  "argument " + std::to_string(index)
-											  + " could not be converted to Python: "
-											  + failure.message(),
-										  failure.traceback());
+
+					error		  = withDiagnostics(
+						failure,
+						"argument " + std::to_string(index)
+							+ " could not be converted to Python: "
+							+ failure.message());
 					return false;
 				}
 				error = Error(ErrorCode::TypeMismatch,
@@ -239,11 +331,11 @@ namespace mais
 				binding.callback(handle);
 			} catch (py::error_already_set &error) {
 				Error failure = fromPythonError(error);
+
 				removeModule(binding.name, sysModules);
-				return Error(failure.code(),
-							 "binding module '" + binding.name
-								 + "' failed: " + failure.message(),
-							 failure.traceback());
+				return withDiagnostics(failure,
+									   "binding module '" + binding.name
+										   + "' failed: " + failure.message());
 			} catch (const std::exception &error) {
 				removeModule(binding.name, sysModules);
 				return Error(ErrorCode::InvocationFailed,
@@ -585,7 +677,7 @@ namespace mais
 			Error failure		   = _impl->fromPythonError(error);
 			const std::string what = "could not import script module '"
 				+ moduleName + "': " + failure.message();
-			return Error(failure.code(), what, failure.traceback());
+			return withDiagnostics(failure, what);
 		} catch (const std::exception &error) {
 			return Error(ErrorCode::InvocationFailed,
 						 "could not import script module '" + moduleName

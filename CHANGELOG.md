@@ -22,6 +22,10 @@ as part of this scripting library. 1.0.0 is the first release of this runtime.
 - `mais::Error`, `mais::ErrorCode`, `isOk`/`isRecoverable`/`isFatal`, and
   `mais::ScriptArgument`: every fallible operation reports a message plus a
   Python traceback instead of throwing or returning a bare Boolean.
+- `mais::Error::exceptionType()` and `mais::Error::frames()`: a Python
+  exception now exposes its type name and up to `Error::maxFrames` structured
+  frames (`file`, `line`, `function`) for console navigation. The formatted
+  `message()`, `traceback()`, and `toString()` output is unchanged.
 - `mais::ScriptArgument::native()`: a host passes a native facade to a hook
   (`configure(settings)`, `on_update(context, dt)`) through a host-written
   converter, so pybind11 stays out of the public headers. An unconvertible
