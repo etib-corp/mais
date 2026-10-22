@@ -60,9 +60,17 @@ namespace mais
 	}
 
 	Error::Error(ErrorCode code, std::string message, std::string traceback)
+		: Error(code, std::move(message), std::move(traceback), {}, {})
+	{
+	}
+
+	Error::Error(ErrorCode code, std::string message, std::string traceback,
+				 std::string exceptionType, std::vector<Frame> frames)
 		: _code(code)
 		, _message(std::move(message))
 		, _traceback(std::move(traceback))
+		, _exceptionType(std::move(exceptionType))
+		, _frames(std::move(frames))
 	{
 	}
 
