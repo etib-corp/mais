@@ -113,7 +113,7 @@ namespace mais
 		}
 
 		private:
-		Error _error;
-		std::optional<T> _value;
+		Error _error;				// The failure, or an Ok error for a value or None result.
+		std::optional<T> _value;	// The value the script returned, or empty for None or failure.
 	};
 }	 // namespace mais
