@@ -28,7 +28,8 @@ Concretely:
   `initialize()` to `shutdown()`.
 - Every Python-touching operation must be made from that thread:
   `initialize()`, `shutdown()`, `loadModule()`, `addSearchPath()` while the
-  runtime is running, `call()`, and `callOptional()`.
+  runtime is running, `hasFunction()`, `listFunctions()`, and every `call()` or
+  `callOptional()` overload, typed or not.
 - Host bindings are written for that thread, and a hook runs there. A script
   that hands a bound function to its own `threading.Thread` moves that call off
   the owning thread; a binding that then tries to re-enter `ScriptRuntime` is
@@ -62,7 +63,8 @@ Concretely:
 | Operation | Owning thread | Any other thread |
 | --- | --- | --- |
 | `initialize()` | starts Python | `AlreadyInitialized`; it never touches the running interpreter, so it is safe |
-| `call()` / `callOptional()` | runs the hook | `WrongThread`, the hook does not run |
+| `call()` / `callOptional()`, typed or not | runs the hook | `WrongThread`, the hook does not run |
+| `hasFunction()` / `listFunctions()` | reads the module namespace | `WrongThread`, nothing is inspected |
 | `loadModule()` | imports the module | `WrongThread`, nothing is imported |
 | `addSearchPath()` while running | prepends to `sys.path` | `WrongThread`, the path is not recorded |
 | `shutdown()` | finalizes Python | `WrongThread`, the runtime keeps running |
@@ -170,6 +172,9 @@ Tested in [`tests/sources/test_thread_affinity.cpp`](../tests/sources/test_threa
 - `call()`, `loadModule()`, `addSearchPath()`, and `shutdown()` from a second
   thread all return `WrongThread`, and none of them changes the runtime: no hook
   ran, the path list is unchanged, the interpreter is still running.
+- `hasFunction()`, `listFunctions()`, `call<T>()`, and `callOptional<T>()` are
+  refused the same way. An absent optional hook is *not* reported as success
+  from a foreign thread, so the refusal cannot be mistaken for "no hook".
 - The owning thread keeps working after those refusals — a real call succeeds and
   the counter increments.
 - The owner is the thread that called `initialize()`, not the thread that

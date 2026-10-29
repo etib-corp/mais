@@ -26,6 +26,8 @@
 #include <pybind11/pybind11.h>
 
 #include <algorithm>
+#include <concepts>
+#include <cstdint>
 #include <cstddef>
 #include <exception>
 #include <filesystem>
@@ -77,6 +79,158 @@ namespace mais
 							 + " must run on the thread that called "
 							   "initialize(): a ScriptRuntime keeps its "
 							   "interpreter and the GIL on that thread");
+		}
+
+		/// Result of converting one returned Python value to a C++ scalar.
+		enum class ConversionResult {
+			Converted,
+			WrongType,
+			OutOfRange,
+		};
+
+		/// Converts a returned Python bool; True and False only.
+		ConversionResult tryConvertReturnValue(const py::handle &value,
+											   bool &out)
+		{
+			if (!PyBool_Check(value.ptr())) {
+				return ConversionResult::WrongType;
+			}
+			out = value.ptr() == Py_True;
+			return ConversionResult::Converted;
+		}
+
+		/// Converts a returned Python int; bool is excluded, 64-bit range
+		/// enforced.
+		ConversionResult tryConvertReturnValue(const py::handle &value,
+											   std::int64_t &out)
+		{
+			// True and False are Python ints as well, so they are excluded
+			// explicitly: a boolean return never reads back as 1 or 0.
+			if (!PyLong_Check(value.ptr()) || PyBool_Check(value.ptr())) {
+				return ConversionResult::WrongType;
+			}
+
+			int overflow = 0;
+			const long long number =
+				PyLong_AsLongLongAndOverflow(value.ptr(), &overflow);
+			if (number == -1 && PyErr_Occurred()) {
+				PyErr_Clear();
+				return ConversionResult::WrongType;
+			}
+			if (overflow != 0) {
+				return ConversionResult::OutOfRange;
+			}
+			out = static_cast<std::int64_t>(number);
+			return ConversionResult::Converted;
+		}
+
+		/// Converts a returned Python float; an int is not silently widened.
+		ConversionResult tryConvertReturnValue(const py::handle &value,
+											   double &out)
+		{
+			if (!PyFloat_Check(value.ptr())) {
+				return ConversionResult::WrongType;
+			}
+			out = PyFloat_AS_DOUBLE(value.ptr());
+			return ConversionResult::Converted;
+		}
+
+		/// Converts a returned Python str as UTF-8, embedded NULs included.
+		ConversionResult tryConvertReturnValue(const py::handle &value,
+											   std::string &out)
+		{
+			if (!PyUnicode_Check(value.ptr())) {
+				return ConversionResult::WrongType;
+			}
+
+			Py_ssize_t size	 = 0;
+			const char *text = PyUnicode_AsUTF8AndSize(value.ptr(), &size);
+			if (text == nullptr) {
+				PyErr_Clear();
+				return ConversionResult::WrongType;
+			}
+			out.assign(text, static_cast<std::size_t>(size));
+			return ConversionResult::Converted;
+		}
+
+		/// Python type name of `value`, for diagnostics: "float", "dict".
+		const char *pythonTypeName(const py::handle &value)
+		{
+			return Py_TYPE(value.ptr())->tp_name;
+		}
+
+		/// State of a name in a module namespace.
+		enum class NamespaceEntry {
+			Absent,
+			NotCallable,
+			Callable,
+		};
+
+		/// \brief Looks a name up directly in a module's dictionary.
+		///
+		/// Deliberately bypasses getattr: a module-level __getattr__ is script
+		/// code, and introspection must not run any. The lookup also avoids
+		/// dir(), which may call a script-defined __dir__.
+		NamespaceEntry namespaceEntry(PyObject *namespaceObject,
+									  std::string_view name)
+		{
+			py::object key =
+				py::reinterpret_steal<py::object>(PyUnicode_FromStringAndSize(
+					name.data(), static_cast<Py_ssize_t>(name.size())));
+			if (!key) {
+				// Not representable as Python text, so no key can match it.
+				PyErr_Clear();
+				return NamespaceEntry::Absent;
+			}
+
+			PyObject *value = PyDict_GetItem(namespaceObject, key.ptr());
+			if (value == nullptr) {
+				return NamespaceEntry::Absent;
+			}
+			return PyCallable_Check(value) != 0 ? NamespaceEntry::Callable
+												: NamespaceEntry::NotCallable;
+		}
+
+		/// Name of the requested type, the way a script author writes it.
+		template<typename T> const char *expectedTypeName()
+		{
+			if constexpr (std::same_as<T, bool>) {
+				return "bool";
+			} else if constexpr (std::same_as<T, std::int64_t>) {
+				return "int";
+			} else if constexpr (std::same_as<T, double>) {
+				return "float";
+			} else {
+				return "str";
+			}
+		}
+
+		/// \brief Converts a call result to `T`, or a strict TypeMismatch.
+		///
+		/// `context` is "module.function", for the diagnostic message.
+		template<typename T>
+		Result<T> convertReturnValue(const py::handle &value,
+									 const std::string &context)
+		{
+			T converted {};
+			switch (tryConvertReturnValue(value, converted)) {
+				case ConversionResult::Converted:
+					return Result<T>(std::move(converted));
+				case ConversionResult::OutOfRange:
+					// Only an int can exceed the range; the message names it.
+					return Result<T>(
+						Error(ErrorCode::TypeMismatch,
+							  "'" + context
+								  + "' returned an int outside the range of "
+									"std::int64_t"));
+				case ConversionResult::WrongType:
+				default:
+					return Result<T>(
+						Error(ErrorCode::TypeMismatch,
+							  "'" + context + "' returned "
+								  + pythonTypeName(value) + ", but "
+								  + expectedTypeName<T>() + " was requested"));
+			}
 		}
 	}	 // namespace
 
@@ -304,72 +458,123 @@ namespace mais
 			ownerThread = std::thread::id();
 		}
 
-		/// Implements call() and callOptional().
-		Error callImpl(std::string_view moduleName,
-					   std::string_view functionName,
-					   const std::vector<ScriptArgument> &arguments,
-					   bool optional)
+		/// The Python result of one invocation, or the error that replaced it.
+		struct CallOutcome {
+			Error error;
+			py::object value;
+		};
+
+		/// \brief Finds a module loaded by loadModule() or a host binding.
+		///
+		/// Fills `error` with the same ModuleNotFound report call() uses, so
+		/// invocation and introspection cannot drift apart.
+		[[nodiscard]] py::module_ *findLoadedModule(std::string_view moduleName,
+													Error &error)
+		{
+			auto module = modules.find(std::string(moduleName));
+
+			if (module == modules.end()) {
+				error = Error(ErrorCode::ModuleNotFound,
+							  "script module '" + std::string(moduleName)
+								  + "' is not loaded; call loadModule() first");
+				return nullptr;
+			}
+			return &module->second;
+		}
+
+		/// Shared module checks for calls and introspection queries.
+		/// `operation` names the refused call in a WrongThread diagnostic.
+		[[nodiscard]] Error validateModule(std::string_view moduleName,
+										   std::string_view operation) const
 		{
 			if (!running) {
 				return Error(ErrorCode::NotInitialized,
 							 "the scripting runtime is not running");
 			}
 			if (!ownsInterpreter()) {
-				return threadAffinityError("call()/callOptional()");
+				return threadAffinityError(operation);
 			}
 			if (moduleName.empty()) {
 				return Error(ErrorCode::InvalidArgument,
 							 "module name is empty");
 			}
+			return Error::ok();
+		}
+
+		/// Shared argument checks for every call() overload.
+		[[nodiscard]] Error validateCall(std::string_view moduleName,
+										 std::string_view functionName,
+										 std::string_view operation) const
+		{
+			Error invalid = validateModule(moduleName, operation);
+
+			if (invalid) {
+				return invalid;
+			}
 			if (functionName.empty()) {
 				return Error(ErrorCode::InvalidArgument,
 							 "function name is empty");
 			}
+			return Error::ok();
+		}
 
-			const std::string moduleKey(moduleName);
-			const std::string functionKey(functionName);
-
-			py::gil_scoped_acquire gil;
+		/// \brief Finds and invokes the function; the caller holds the GIL.
+		///
+		/// A missing function is not an error when `optional`: the outcome is
+		/// then Ok without a value, which the typed path reports as a result
+		/// without a value and the untyped path as plain success.
+		[[nodiscard]] CallOutcome
+			invoke(const std::string &moduleKey, const std::string &functionKey,
+				   const std::vector<ScriptArgument> &arguments, bool optional)
+		{
+			CallOutcome outcome;
 			try {
-				auto module = modules.find(moduleKey);
-				if (module == modules.end()) {
-					return Error(
-						ErrorCode::ModuleNotFound,
-						"script module '" + moduleKey
-							+ "' is not loaded; call loadModule() first");
+				Error lookupFailure;
+				py::module_ *module =
+					findLoadedModule(moduleKey, lookupFailure);
+
+				if (module == nullptr) {
+					outcome.error = std::move(lookupFailure);
+					return outcome;
 				}
 
-				py::object function = py::getattr(
-					module->second, functionKey.c_str(), py::none());
+				py::object function =
+					py::getattr(*module, functionKey.c_str(), py::none());
+
 				if (function.is_none()) {
-					if (optional) {
-						return Error::ok();
+					if (!optional) {
+						outcome.error =
+							Error(ErrorCode::FunctionNotFound,
+								  "'" + moduleKey + "' has no function '"
+									  + functionKey + "'");
 					}
-					return Error(ErrorCode::FunctionNotFound,
-								 "'" + moduleKey + "' has no function '"
-									 + functionKey + "'");
+					return outcome;
 				}
 				if (!PyCallable_Check(function.ptr())) {
-					return Error(ErrorCode::TypeMismatch,
-								 "'" + moduleKey + "." + functionKey
-									 + "' is not callable");
+					outcome.error = Error(ErrorCode::TypeMismatch,
+										  "'" + moduleKey + "." + functionKey
+											  + "' is not callable");
+					return outcome;
 				}
 
 				// Convert every argument before touching Python so a failed
 				// conversion leaves no partially built tuple behind.
 				std::vector<py::object> converted;
+
 				converted.reserve(arguments.size());
 				for (std::size_t index = 0; index < arguments.size(); ++index) {
 					py::object object;
 					Error conversionFailure;
 					if (!convertArgument(arguments[index], index, object,
 										 conversionFailure)) {
-						return conversionFailure;
+						outcome.error = std::move(conversionFailure);
+						return outcome;
 					}
 					converted.push_back(std::move(object));
 				}
 
 				py::tuple packed(converted.size());
+
 				for (std::size_t index = 0; index < converted.size(); ++index) {
 					// PyTuple_SetItem steals the reference it is handed.
 					if (PyTuple_SetItem(packed.ptr(),
@@ -380,19 +585,72 @@ namespace mais
 					}
 				}
 
-				py::object result = py::reinterpret_steal<py::object>(
+				outcome.value = py::reinterpret_steal<py::object>(
 					PyObject_CallObject(function.ptr(), packed.ptr()));
-				if (!result) {
+				if (!outcome.value) {
 					throw py::error_already_set();
 				}
-				return Error::ok();
+				return outcome;
 			} catch (py::error_already_set &error) {
-				return fromPythonError(error);
+				outcome.value = py::object();
+				outcome.error = fromPythonError(error);
+				return outcome;
 			} catch (const std::exception &error) {
-				return Error(ErrorCode::InvocationFailed,
-							 "calling '" + moduleKey + "." + functionKey
-								 + "' failed: " + error.what());
+				outcome.value = py::object();
+				outcome.error =
+					Error(ErrorCode::InvocationFailed,
+						  "calling '" + moduleKey + "." + functionKey
+							  + "' failed: " + error.what());
+				return outcome;
 			}
+		}
+
+		/// Implements the Error-returning call() and callOptional().
+		Error callImpl(std::string_view moduleName,
+					   std::string_view functionName,
+					   const std::vector<ScriptArgument> &arguments,
+					   bool optional)
+		{
+			if (Error invalid = validateCall(moduleName, functionName,
+											 "call()/callOptional()");
+				invalid) {
+				return invalid;
+			}
+
+			py::gil_scoped_acquire gil;
+			CallOutcome outcome =
+				invoke(std::string(moduleName), std::string(functionName),
+					   arguments, optional);
+			return std::move(outcome.error);
+		}
+
+		/// Implements the typed call() and callOptional() overloads.
+		template<ScriptReturnType T>
+		Result<T> callTyped(std::string_view moduleName,
+							std::string_view functionName,
+							const std::vector<ScriptArgument> &arguments,
+							bool optional)
+		{
+			if (Error invalid = validateCall(moduleName, functionName,
+											 "call()/callOptional()");
+				invalid) {
+				return Result<T>(std::move(invalid));
+			}
+
+			py::gil_scoped_acquire gil;
+			CallOutcome outcome =
+				invoke(std::string(moduleName), std::string(functionName),
+					   arguments, optional);
+			if (outcome.error) {
+				return Result<T>(std::move(outcome.error));
+			}
+			if (!outcome.value || outcome.value.is_none()) {
+				return Result<T>::none();
+			}
+
+			const std::string context =
+				std::string(moduleName) + "." + std::string(functionName);
+			return convertReturnValue<T>(outcome.value, context);
 		}
 	};
 
@@ -634,6 +892,108 @@ namespace mais
 		return _impl->modules.find(moduleName) != _impl->modules.end();
 	}
 
+	Result<bool> ScriptRuntime::hasFunction(std::string_view moduleName,
+											std::string_view functionName) const
+	{
+		Error invalid =
+			_impl->validateCall(moduleName, functionName, "hasFunction()");
+
+		if (invalid) {
+			return Result<bool>(std::move(invalid));
+		}
+
+		py::gil_scoped_acquire gil;
+		Error lookupFailure;
+		py::module_ *module =
+			_impl->findLoadedModule(moduleName, lookupFailure);
+
+		if (module == nullptr) {
+			return Result<bool>(std::move(lookupFailure));
+		}
+
+		PyObject *namespaceObject = PyModule_GetDict(module->ptr());
+		if (namespaceObject == nullptr) {
+			PyErr_Clear();
+			return Result<bool>(Error(ErrorCode::InterpreterFailure,
+									  "module '" + std::string(moduleName)
+										  + "' has no namespace"));
+		}
+
+		switch (namespaceEntry(namespaceObject, functionName)) {
+			case NamespaceEntry::Absent:
+				return Result<bool>(false);
+			case NamespaceEntry::NotCallable:
+				return Result<bool>(Error(ErrorCode::TypeMismatch,
+										  "'" + std::string(moduleName) + "."
+											  + std::string(functionName)
+											  + "' is not callable"));
+			case NamespaceEntry::Callable:
+			default:
+				return Result<bool>(true);
+		}
+	}
+
+	Result<std::vector<std::string>>
+		ScriptRuntime::listFunctions(std::string_view moduleName) const
+	{
+		Error invalid = _impl->validateModule(moduleName, "listFunctions()");
+
+		if (invalid) {
+			return Result<std::vector<std::string>>(std::move(invalid));
+		}
+
+		py::gil_scoped_acquire gil;
+		Error lookupFailure;
+		py::module_ *module =
+			_impl->findLoadedModule(moduleName, lookupFailure);
+
+		if (module == nullptr) {
+			return Result<std::vector<std::string>>(std::move(lookupFailure));
+		}
+
+		PyObject *namespaceObject = PyModule_GetDict(module->ptr());
+		if (namespaceObject == nullptr) {
+			PyErr_Clear();
+			return Result<std::vector<std::string>>(Error(
+				ErrorCode::InterpreterFailure,
+				"module '" + std::string(moduleName) + "' has no namespace"));
+		}
+
+		std::vector<std::string> names;
+		Py_ssize_t position = 0;
+
+		PyObject *key	= nullptr;
+		PyObject *value = nullptr;
+		while (PyDict_Next(namespaceObject, &position, &key, &value)) {
+			// Non-string keys can only come from direct dict manipulation;
+			// they are not addressable as functions.
+			if (!PyUnicode_Check(key) || !PyCallable_Check(value)) {
+				continue;
+			}
+
+			Py_ssize_t size	 = 0;
+			const char *text = PyUnicode_AsUTF8AndSize(key, &size);
+
+			if (text == nullptr) {
+				// A string that cannot be encoded as UTF-8 cannot be passed to
+				// call() either; skip it rather than failing the whole list.
+				PyErr_Clear();
+				continue;
+			}
+
+			std::string name(text, static_cast<std::size_t>(size));
+
+			if (name.empty() || name.front() == '_') {
+				continue;
+			}
+			names.push_back(std::move(name));
+		}
+
+		// A console must render the same order on every run and platform.
+		std::sort(names.begin(), names.end());
+		return Result<std::vector<std::string>>(std::move(names));
+	}
+
 	Error ScriptRuntime::call(std::string_view moduleName,
 							  std::string_view functionName)
 	{
@@ -661,4 +1021,87 @@ namespace mais
 		return _impl->callImpl(moduleName, functionName,
 							   std::vector<ScriptArgument>(arguments), true);
 	}
+
+	template<ScriptReturnType T>
+	Result<T> ScriptRuntime::call(std::string_view moduleName,
+								  std::string_view functionName)
+	{
+		return _impl->callTyped<T>(moduleName, functionName, {}, false);
+	}
+
+	template<ScriptReturnType T> Result<T>
+		ScriptRuntime::call(std::string_view moduleName,
+							std::string_view functionName,
+							std::initializer_list<ScriptArgument> arguments)
+	{
+		return _impl->callTyped<T>(moduleName, functionName,
+								   std::vector<ScriptArgument>(arguments),
+								   false);
+	}
+
+	template<ScriptReturnType T>
+	Result<T> ScriptRuntime::callOptional(std::string_view moduleName,
+										  std::string_view functionName)
+	{
+		return _impl->callTyped<T>(moduleName, functionName, {}, true);
+	}
+
+	template<ScriptReturnType T> Result<T> ScriptRuntime::callOptional(
+		std::string_view moduleName, std::string_view functionName,
+		std::initializer_list<ScriptArgument> arguments)
+	{
+		return _impl->callTyped<T>(moduleName, functionName,
+								   std::vector<ScriptArgument>(arguments),
+								   true);
+	}
+
+	// The ScriptReturnType concept admits exactly these four types, so these
+	// explicit instantiations are the complete link surface for typed calls.
+	// Defining them in this translation unit is what keeps pybind11 out of
+	// headers/mais/.
+	template Result<bool> ScriptRuntime::call<bool>(std::string_view,
+													std::string_view);
+	template Result<std::int64_t>
+		ScriptRuntime::call<std::int64_t>(std::string_view, std::string_view);
+	template Result<double> ScriptRuntime::call<double>(std::string_view,
+														std::string_view);
+	template Result<std::string>
+		ScriptRuntime::call<std::string>(std::string_view, std::string_view);
+
+	template Result<bool>
+		ScriptRuntime::call<bool>(std::string_view, std::string_view,
+								  std::initializer_list<ScriptArgument>);
+	template Result<std::int64_t> ScriptRuntime::call<std::int64_t>(
+		std::string_view, std::string_view,
+		std::initializer_list<ScriptArgument>);
+	template Result<double>
+		ScriptRuntime::call<double>(std::string_view, std::string_view,
+									std::initializer_list<ScriptArgument>);
+	template Result<std::string>
+		ScriptRuntime::call<std::string>(std::string_view, std::string_view,
+										 std::initializer_list<ScriptArgument>);
+
+	template Result<bool> ScriptRuntime::callOptional<bool>(std::string_view,
+															std::string_view);
+	template Result<std::int64_t>
+		ScriptRuntime::callOptional<std::int64_t>(std::string_view,
+												  std::string_view);
+	template Result<double>
+		ScriptRuntime::callOptional<double>(std::string_view, std::string_view);
+	template Result<std::string>
+		ScriptRuntime::callOptional<std::string>(std::string_view,
+												 std::string_view);
+
+	template Result<bool> ScriptRuntime::callOptional<bool>(
+		std::string_view, std::string_view,
+		std::initializer_list<ScriptArgument>);
+	template Result<std::int64_t> ScriptRuntime::callOptional<std::int64_t>(
+		std::string_view, std::string_view,
+		std::initializer_list<ScriptArgument>);
+	template Result<double> ScriptRuntime::callOptional<double>(
+		std::string_view, std::string_view,
+		std::initializer_list<ScriptArgument>);
+	template Result<std::string> ScriptRuntime::callOptional<std::string>(
+		std::string_view, std::string_view,
+		std::initializer_list<ScriptArgument>);
 }	 // namespace mais

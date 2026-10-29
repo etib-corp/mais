@@ -28,6 +28,7 @@
 
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace
 {
@@ -158,5 +159,57 @@ TEST(ThreadAffinityTest, OwnershipFollowsTheMostRecentInitialize)
 
 	// The runtime is free again, and this thread becomes the new owner.
 	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.shutdown().isOk());
+}
+
+/// Introspection and typed calls read Python like call() does, so they obey the
+/// same contract: a foreign thread is refused instead of waiting on the GIL.
+TEST(ThreadAffinityTest, RefusesIntrospectionAndTypedCallsFromAnotherThread)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeCounter counter("introspection");
+
+	mais_test::bindFakeHost(runtime, counter);
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+
+	mais::Error hasFunctionError;
+	mais::Error listFunctionsError;
+	mais::Error typedCallError;
+	mais::Error typedOptionalError;
+
+	std::thread other([&] {
+		hasFunctionError   = runtime.hasFunction("fake_host", "bump").error();
+		listFunctionsError = runtime.listFunctions("fake_host").error();
+		typedCallError	   = runtime.call<bool>("fake_host", "flag").error();
+		// An absent optional hook is success on the owning thread; from the
+		// wrong thread it must still be refused, never reported as "no hook".
+		typedOptionalError =
+			runtime.callOptional<bool>("fake_host", "absent_hook").error();
+	});
+	other.join();
+
+	EXPECT_EQ(hasFunctionError.code(), mais::ErrorCode::WrongThread);
+	EXPECT_EQ(listFunctionsError.code(), mais::ErrorCode::WrongThread);
+	EXPECT_EQ(typedCallError.code(), mais::ErrorCode::WrongThread);
+	EXPECT_EQ(typedOptionalError.code(), mais::ErrorCode::WrongThread);
+
+	// The owning thread still gets the real answers.
+	mais::Result<bool> present = runtime.hasFunction("fake_host", "bump");
+	ASSERT_TRUE(present.isOk()) << present.error().toString();
+	EXPECT_TRUE(present.value());
+
+	mais::Result<std::vector<std::string>> hooks =
+		runtime.listFunctions("fake_host");
+	ASSERT_TRUE(hooks.isOk()) << hooks.error().toString();
+	EXPECT_FALSE(hooks.value().empty());
+
+	mais::Result<bool> typed = runtime.call<bool>("fake_host", "flag");
+	ASSERT_TRUE(typed.isOk()) << typed.error().toString();
+	EXPECT_TRUE(typed.value());
+
+	EXPECT_TRUE(runtime.callOptional<bool>("fake_host", "absent_hook").isOk());
+
 	ASSERT_TRUE(runtime.shutdown().isOk());
 }
