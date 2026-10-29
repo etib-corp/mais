@@ -111,7 +111,8 @@ def on_update(delta_seconds):
 
 Arguments are scalars only (`int`, `float`, `bool`, `str`) in this version, so a
 hook that needs a native object reads it from the host module instead of
-receiving it as a parameter.
+receiving it as a parameter. The same four types can be read back from a call;
+see [section 6](#6-read-a-value-back).
 
 ## 5. Report failures with the traceback
 
@@ -130,7 +131,42 @@ if (mais::Error error = runtime.call("game", "on_update"); error) {
 `callOptional` hides only the "function does not exist" case; a hook that exists
 and raises still reports its failure.
 
-## 6. Stop before destroying host objects
+## 6. Read a value back
+
+Typed overloads of `call()` and `callOptional()` read what a script returns.
+`T` is one of `bool`, `std::int64_t`, `double`, or `std::string` — the same
+four types an argument can carry:
+
+```cpp
+mais::Result<bool> wants_quit =
+    runtime.callOptional<bool>("game", "wants_quit");
+
+if (!wants_quit.isOk()) {                    // the hook raised
+    std::cerr << wants_quit.error().toString() << '\n';
+} else if (wants_quit.hasValue() && wants_quit.value()) {
+    running = false;
+}
+```
+
+The matching script:
+
+```python
+def wants_quit():
+    return host.clock.delta_seconds > 10.0
+```
+
+A `mais::Result<T>` has three states:
+
+- **value** — `hasValue()` is true, and `value()` returns what the script
+  returned;
+- **no value** — the call succeeded (`isOk()`), but the script returned `None`,
+  or an optional hook does not exist. Both mean "no opinion": the host keeps
+  its defaults. `None` is never reported as a failure;
+- **failure** — `isOk()` is false; read `error()`. A return value of another
+  Python type reports `TypeMismatch` with the function name, the returned type,
+  and the requested one, instead of converting silently.
+
+## 7. Stop before destroying host objects
 
 The interpreter must outlive every Python reference to a native object, so shut
 the runtime down before those objects are destroyed:
