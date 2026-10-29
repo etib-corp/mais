@@ -26,6 +26,9 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
+#include <filesystem>
+#include <fstream>
 #include <algorithm>
 #include <cstdint>
 #include <stdexcept>
@@ -39,6 +42,35 @@ namespace
 	{
 		static const std::string directory = MAIS_TEST_SCRIPT_DIR;
 		return directory;
+	}
+
+	/// 1-based line of the first line containing `needle`; 0 when absent.
+	std::size_t lineContaining(const std::string &path,
+							   const std::string &needle)
+	{
+		std::ifstream file(path);
+		std::string line;
+		std::size_t number = 0;
+		while (std::getline(file, line)) {
+			++number;
+			if (line.find(needle) != std::string::npos) {
+				return number;
+			}
+		}
+		return 0;
+	}
+
+	/// Number of non-overlapping occurrences of `needle` in `text`.
+	std::size_t countOccurrences(const std::string &text,
+								 const std::string &needle)
+	{
+		std::size_t count	 = 0;
+		std::size_t position = 0;
+		while ((position = text.find(needle, position)) != std::string::npos) {
+			++count;
+			position += needle.size();
+		}
+		return count;
 	}
 
 	/// A type no binding registers, so converting it to Python must fail
@@ -106,6 +138,128 @@ TEST(FakeHostAcceptanceTest, ReportsAPythonExceptionWithATraceback)
 			  std::string::npos);
 	EXPECT_NE(error.traceback().find("in explode"), std::string::npos);
 	EXPECT_NE(error.traceback().find("fake_host.py"), std::string::npos);
+}
+
+/// The formatted traceback stays for logs; the same exception also arrives as
+/// data a console can navigate.
+TEST(StructuredTracebackTest, ExposesFramesForAPythonException)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeCounter counter("frames");
+
+	mais_test::bindFakeHost(runtime, counter);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+
+	mais::Error error = runtime.call("fake_host", "explode");
+
+	ASSERT_EQ(error.exceptionType(), "ValueError");
+	ASSERT_FALSE(error.frames().empty());
+
+	const mais::Error::Frame &innermost = error.frames().back();
+	EXPECT_EQ(std::filesystem::path(innermost.file).filename().string(),
+			  "fake_host.py");
+	EXPECT_EQ(innermost.function, "explode");
+	EXPECT_NE(error.traceback().find(innermost.file), std::string::npos);
+
+	const std::size_t expectedLine =
+		lineContaining(scriptDirectory() + "/fake_host.py",
+					   "raise ValueError(\"boom from Python\")");
+	ASSERT_NE(expectedLine, 0U);
+	EXPECT_EQ(innermost.line, expectedLine);
+
+	const std::string formatted =
+		"line " + std::to_string(expectedLine) + ", in explode";
+	EXPECT_NE(error.traceback().find(formatted), std::string::npos);
+}
+
+/// A deep recursion keeps the raise site and a bounded list, while the
+/// formatted traceback is produced exactly as before.
+TEST(StructuredTracebackTest, BoundsFramesAndKeepsTheInnermost)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeCounter counter("deep-frames");
+
+	mais_test::bindFakeHost(runtime, counter);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+
+	mais::Error error = runtime.call("fake_host", "recurse",
+									 { mais::ScriptArgument::integer(64) });
+
+	ASSERT_EQ(error.code(), mais::ErrorCode::InvocationFailed);
+	ASSERT_TRUE(error.hasTraceback());
+	ASSERT_EQ(error.frames().size(), mais::Error::maxFrames);
+
+	const std::size_t raiseLine = lineContaining(
+		scriptDirectory() + "/fake_host.py", "raise ValueError(\"deep boom\")");
+	ASSERT_NE(raiseLine, 0U);
+	EXPECT_EQ(error.frames().back().line, raiseLine);
+	EXPECT_EQ(error.frames().back().function, "recurse");
+
+	EXPECT_GT(countOccurrences(error.traceback(), "in recurse"),
+			  mais::Error::maxFrames);
+}
+
+/// A failure raised before Python runs has no frame and no exception type;
+/// hasTraceback() still reports the truth.
+TEST(StructuredTracebackTest, ReportsNoFramesWithoutAPythonException)
+{
+	mais::ScriptRuntime runtime;
+
+	mais::Error error =
+		runtime.addSearchPath(MAIS_TEST_SCRIPT_DIR "/not-a-directory");
+
+	ASSERT_EQ(error.code(), mais::ErrorCode::ScriptNotFound);
+	EXPECT_TRUE(error.frames().empty());
+	EXPECT_TRUE(error.exceptionType().empty());
+	EXPECT_FALSE(error.hasTraceback());
+}
+
+/// Wrapping an import failure for the host keeps the structured context.
+TEST(StructuredTracebackTest, CarriesDiagnosticsThroughImportWrapping)
+{
+	mais::ScriptRuntime runtime;
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+
+	mais::Error error = runtime.loadModule("broken_module");
+
+	ASSERT_EQ(error.exceptionType(), "RuntimeError");
+	ASSERT_FALSE(error.frames().empty());
+	EXPECT_EQ(error.frames().back().function, "<module>");
+	EXPECT_EQ(
+		std::filesystem::path(error.frames().back().file).filename().string(),
+		"broken_module.py");
+	EXPECT_NE(error.message().find("could not import script module"),
+			  std::string::npos);
+}
+
+/// Structured fields never change the formatted text a host already logs.
+TEST(StructuredTracebackTest, KeepsTheFormattedTracebackUnchanged)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeCounter counter("unchanged");
+
+	mais_test::bindFakeHost(runtime, counter);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+
+	mais::Error error = runtime.call("fake_host", "explode");
+
+	ASSERT_FALSE(error.isOk());
+	EXPECT_EQ(error.toString(),
+			  "[InvocationFailed] " + error.message() + "\n"
+				  + error.traceback());
+	EXPECT_NE(error.traceback().find("Traceback (most recent call last)"),
+			  std::string::npos);
 }
 
 TEST(FakeHostAcceptanceTest, KeepsRunningAfterAScriptError)
