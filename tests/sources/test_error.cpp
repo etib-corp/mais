@@ -66,6 +66,7 @@ TEST(ErrorTest, NamesEveryCode)
 	EXPECT_EQ(mais::errorCodeName(mais::ErrorCode::Ok), "Ok");
 	EXPECT_EQ(mais::errorCodeName(mais::ErrorCode::AlreadyInitialized),
 			  "AlreadyInitialized");
+	EXPECT_EQ(mais::errorCodeName(mais::ErrorCode::WrongThread), "WrongThread");
 	EXPECT_EQ(mais::errorCodeName(mais::ErrorCode::ScriptNotFound),
 			  "ScriptNotFound");
 	EXPECT_EQ(mais::errorCodeName(mais::ErrorCode::InvocationFailed),
