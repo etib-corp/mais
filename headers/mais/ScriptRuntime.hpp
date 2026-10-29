@@ -165,10 +165,30 @@ namespace mais
 	///
 	/// Threading
 	/// ---------
-	/// The runtime keeps the GIL for the thread that called initialize(). Every
-	/// method and every script callback must run on that thread. Script errors
-	/// never propagate as C++ exceptions: they are reported through Error so a
-	/// failed hook cannot silently unwind the host's loop.
+	/// The runtime is thread-affine. The thread that calls initialize() owns
+	/// the interpreter until shutdown() returns: maïs keeps the GIL on that
+	/// thread and never releases it between calls, so host bindings are
+	/// written for that thread and normally run while a hook is executing.
+	///
+	/// Every method that touches Python must therefore be called from that
+	/// thread — initialize(), shutdown(), loadModule(), addSearchPath() while
+	/// the runtime is running, call(), and callOptional(). A call from any
+	/// other thread is refused with ErrorCode::WrongThread instead of blocking
+	/// on the GIL. The runtime is not internally synchronized, so the
+	/// accessors that only read C++ state (isRunning(), searchPaths(),
+	/// bindings(), isModuleLoaded()) are safe only when the host itself
+	/// guarantees that no state-changing call runs concurrently.
+	///
+	/// The one violation maïs cannot report is destroying a running runtime on
+	/// another thread: ~ScriptRuntime() stops the interpreter and has no way
+	/// to fail, so it must run on the owning thread too. A runtime whose owner
+	/// thread has exited without calling shutdown() cannot be stopped by
+	/// anyone else either.
+	///
+	/// Script errors never propagate as C++ exceptions: they are reported
+	/// through Error so a failed hook cannot silently unwind the host's loop.
+	/// See docs/THREADING.md for the decision and the alternatives that were
+	/// rejected.
 	class ScriptRuntime
 	{
 		public:
@@ -203,7 +223,9 @@ namespace mais
 		Error initialize();
 
 		/// Releases script references and finalizes the interpreter.
-		/// \returns NotInitialized when the runtime is not running.
+		/// \returns NotInitialized when the runtime is not running;
+		/// WrongThread when called from a thread that does not own the
+		/// interpreter, in which case the runtime keeps running.
 		Error shutdown();
 
 		/// True between a successful initialize() and shutdown().
@@ -212,15 +234,18 @@ namespace mais
 		// -- Script loading --------------------------------------------------
 
 		/// \brief Adds a directory that loadModule() searches for imports.
-		/// \returns ScriptNotFound when `path` is not an existing directory.
+		/// \returns ScriptNotFound when `path` is not an existing directory;
+		/// WrongThread when the path would touch Python from a thread that
+		/// does not own the interpreter.
 		Error addSearchPath(const std::string &path);
 
 		/// Search paths configured so far, in insertion order.
 		[[nodiscard]] std::vector<std::string> searchPaths() const;
 
 		/// Imports `moduleName` using the configured search paths.
-		/// \returns NotInitialized, InvalidArgument, ModuleNotFound, or
-		/// InvocationFailed when the module raises while importing.
+		/// \returns NotInitialized, InvalidArgument, ModuleNotFound,
+		/// WrongThread, or InvocationFailed when the module raises while
+		/// importing.
 		Error loadModule(const std::string &moduleName);
 
 		/// True when `moduleName` was imported by loadModule() or registered as
@@ -229,7 +254,10 @@ namespace mais
 
 		// -- Invocation ------------------------------------------------------
 
-		/// Calls `functionName` in `moduleName` with no arguments.
+		/// \brief Calls `functionName` in `moduleName` with no arguments.
+		///
+		/// Every call() and callOptional() overload reports WrongThread when
+		/// invoked from a thread other than the one that called initialize().
 		Error call(std::string_view moduleName, std::string_view functionName);
 
 		/// Calls `functionName` in `moduleName` with the given arguments.

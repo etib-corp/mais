@@ -30,6 +30,7 @@
 #include <exception>
 #include <filesystem>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -65,11 +66,26 @@ namespace mais
 			}
 			return ErrorCode::InvocationFailed;
 		}
+
+		/// The refusal for a Python-touching call from a thread that does not
+		/// own the interpreter. Without it the caller would wait for a GIL the
+		/// owning thread never releases.
+		Error threadAffinityError(std::string_view operation)
+		{
+			return Error(ErrorCode::WrongThread,
+						 std::string(operation)
+							 + " must run on the thread that called "
+							   "initialize(): a ScriptRuntime keeps its "
+							   "interpreter and the GIL on that thread");
+		}
 	}	 // namespace
 
 	struct ScriptRuntime::Impl {
 		/// False until initialize() succeeds, and again after shutdown().
 		bool running = false;
+
+		/// Thread that called initialize(); no thread while stopped.
+		std::thread::id ownerThread;
 
 		/// Owns the interpreter; resetting it finalizes Python.
 		std::unique_ptr<py::scoped_interpreter> interpreter;
@@ -86,6 +102,12 @@ namespace mais
 		/// The `traceback` module, imported once in initialize() so that
 		/// reporting a failure never imports anything while handling one.
 		py::object tracebackModule;
+
+		/// True when the calling thread started the running interpreter.
+		[[nodiscard]] bool ownsInterpreter() const noexcept
+		{
+			return std::this_thread::get_id() == ownerThread;
+		}
 
 		/// Builds an Error carrying the Python message and traceback.
 		[[nodiscard]] Error
@@ -278,7 +300,8 @@ namespace mais
 				// Finalization is best-effort; the runtime state is reset
 				// below.
 			}
-			running = false;
+			running		= false;
+			ownerThread = std::thread::id();
 		}
 
 		/// Implements call() and callOptional().
@@ -290,6 +313,9 @@ namespace mais
 			if (!running) {
 				return Error(ErrorCode::NotInitialized,
 							 "the scripting runtime is not running");
+			}
+			if (!ownsInterpreter()) {
+				return threadAffinityError("call()/callOptional()");
 			}
 			if (moduleName.empty()) {
 				return Error(ErrorCode::InvalidArgument,
@@ -487,7 +513,8 @@ namespace mais
 						 std::string("could not start Python: ")
 							 + error.what());
 		}
-		_impl->running = true;
+		_impl->running	   = true;
+		_impl->ownerThread = std::this_thread::get_id();
 
 		try {
 			// Cache the module now so that reporting a later failure never has
@@ -527,6 +554,9 @@ namespace mais
 			return Error(ErrorCode::NotInitialized,
 						 "the scripting runtime is not running");
 		}
+		if (!_impl->ownsInterpreter()) {
+			return threadAffinityError("shutdown()");
+		}
 		_impl->stop();
 		return Error::ok();
 	}
@@ -540,6 +570,9 @@ namespace mais
 	{
 		if (path.empty()) {
 			return Error(ErrorCode::InvalidArgument, "search path is empty");
+		}
+		if (_impl->running && !_impl->ownsInterpreter()) {
+			return threadAffinityError("addSearchPath()");
 		}
 
 		std::error_code filesystemError;
@@ -571,6 +604,9 @@ namespace mais
 		if (!_impl->running) {
 			return Error(ErrorCode::NotInitialized,
 						 "the scripting runtime is not running");
+		}
+		if (!_impl->ownsInterpreter()) {
+			return threadAffinityError("loadModule()");
 		}
 		if (moduleName.empty()) {
 			return Error(ErrorCode::InvalidArgument, "module name is empty");
