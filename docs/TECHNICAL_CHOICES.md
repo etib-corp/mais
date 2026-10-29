@@ -28,7 +28,9 @@ Do not require an `IEngine` interface in the generic scripting API for a single 
 
 - The host owns native engine objects; Python receives references or handles only with a documented lifetime policy.
 - A single process-wide interpreter owner is the initial default. Additional interpreter and subinterpreter behavior requires separate design and tests.
-- Access Python objects while holding the GIL. Run script callbacks on a known thread unless a deliberate cross-thread dispatch model is implemented.
+- **Decided:** the thread that calls `initialize()` owns the interpreter, and maïs keeps the GIL on it. Every Python-touching method must be called from that thread, host bindings are written for it, and a call from another thread is refused with `WrongThread` rather than blocking. The runtime is not internally synchronized, so its state accessors are single-threaded too.
+- **Rejected:** releasing the GIL between calls. It allows cross-thread entry without parallelism and moves interpreter-finalization ordering onto every caller.
+- **Deferred:** an explicit dispatch queue onto the interpreter thread. It requires a host pump point, ordered delivery, result hand-off, and a shutdown drain rule; it is tracked as MAIS-4.1 and gated on an answered Q5 in `ROADMAP.md`. The full rationale is in [THREADING.md](THREADING.md).
 - Drop Python callbacks and wrappers before interpreter finalization, and finalize the interpreter before destroying native objects they can reference.
 - C++ owns the application's main loop. Scripts execute at host-defined points; avoid giving Python an uncontrolled blocking `run()` entry point.
 
@@ -52,7 +54,7 @@ maïs contains no UI. A consumer can implement `Panel`, `Button`, `Text`, `Input
 
 - Hot reloading and state migration.
 - Python sandboxing and untrusted-script execution.
-- Multi-interpreter or multi-threaded callback execution.
+- Multi-interpreter or multi-threaded callback execution: the threading model is decided in [THREADING.md](THREADING.md), and cross-thread dispatch needs its own design before any code (MAIS-4.1).
 - Engine-specific binding API breadth.
 - Whether a second scripting language merits a shared language-neutral interface.
 
