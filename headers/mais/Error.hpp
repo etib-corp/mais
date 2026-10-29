@@ -22,8 +22,10 @@
 
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace mais
 {
@@ -66,7 +68,8 @@ namespace mais
 		/// A value could not be converted between C++ and Python.
 		TypeMismatch,
 
-		/// The script raised a Python exception; see Error::traceback().
+		/// The script raised a Python exception; see Error::traceback()
+		/// and Error::frames().
 		InvocationFailed,
 	};
 
@@ -102,6 +105,27 @@ namespace mais
 	class Error
 	{
 		public:
+		/// \brief One frame of a captured Python traceback.
+		///
+		/// Frames are copied out of the traceback object pybind11 captured,
+		/// so they stay readable after the interpreter is shut down.
+		struct Frame {
+			/// File Python reported for the frame, as written in traceback().
+			std::string file;
+
+			/// 1-based line number, or 0 when Python reported none.
+			std::size_t line = 0;
+
+			/// Function name, or "<module>" for module-level code.
+			std::string function;
+		};
+
+		/// \brief Upper bound on frames() for one Error.
+		///
+		/// A deeper traceback keeps its innermost frames, so the raise site
+		/// is never dropped.
+		static constexpr std::size_t maxFrames = 32;
+
 		/// Creates an Ok error.
 		Error() noexcept = default;
 
@@ -110,6 +134,11 @@ namespace mais
 
 		/// Creates an error with a message and captured Python traceback text.
 		Error(ErrorCode code, std::string message, std::string traceback);
+
+		/// Creates an error carrying Python context: traceback text, the
+		/// exception type, and structured frames.
+		Error(ErrorCode code, std::string message, std::string traceback,
+			  std::string exceptionType, std::vector<Frame> frames);
 
 		/// An Ok error.
 		[[nodiscard]] static Error ok() noexcept
@@ -147,7 +176,26 @@ namespace mais
 			return _traceback;
 		}
 
-		/// True when a Python traceback was captured.
+		/// \brief Python exception type name, for example "ValueError".
+		///
+		/// Empty when the failure did not originate from a Python exception.
+		[[nodiscard]] const std::string &exceptionType() const noexcept
+		{
+			return _exceptionType;
+		}
+
+		/// \brief Frames of the captured traceback, outermost first.
+		///
+		/// The order matches traceback.format_exception(), so
+		/// frames().back() is the raise site. At most maxFrames entries are
+		/// retained: a deeper traceback keeps its innermost frames. Empty
+		/// when the error has no Python frame.
+		[[nodiscard]] const std::vector<Frame> &frames() const noexcept
+		{
+			return _frames;
+		}
+
+		/// True when formatted Python traceback text was captured.
 		[[nodiscard]] bool hasTraceback() const noexcept
 		{
 			return !_traceback.empty();
@@ -160,5 +208,7 @@ namespace mais
 		ErrorCode _code = ErrorCode::Ok;
 		std::string _message;
 		std::string _traceback;
+		std::string _exceptionType;
+		std::vector<Frame> _frames;
 	};
 }	 // namespace mais

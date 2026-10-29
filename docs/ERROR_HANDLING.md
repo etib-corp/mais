@@ -20,7 +20,7 @@ problem.
 | `ModuleNotFound`     | A module could not be imported, or was never loaded          | Load it first                  |
 | `FunctionNotFound`   | The module has no such function                              | Use `callOptional()` for hooks, or `hasFunction()` to check without invoking |
 | `TypeMismatch`       | A value could not be converted (including a native argument), the attribute is not callable, or a returned value has the wrong type | Fix the argument or the script |
-| `InvocationFailed`   | The script raised a Python exception                          | Log `traceback()` and continue |
+| `InvocationFailed`   | The script raised a Python exception                          | Log `traceback()`/`frames()` and continue |
 
 Helpers: `isOk`, `isRecoverable`, `isFatal`, and `errorCodeName`.
 
@@ -60,12 +60,15 @@ call simply has to be made on the owning thread.
 ## Python exceptions
 
 When a script raises, the runtime captures the exception pybind11 reports and
-fills both halves of the error:
+fills the diagnostic fields:
 
 - `Error::message()` — the Python message, for example
   `ValueError: boom from Python`.
 - `Error::traceback()` — the traceback formatted by
   `traceback.format_exception()`, including the script file and line.
+- `Error::exceptionType()` — the Python type name, for example
+  `ValueError`; empty when no Python exception was captured.
+- `Error::frames()` — the traceback as structured data, described below.
 
 ```cpp
 mais::Error error = runtime.call("game", "explode");
@@ -79,6 +82,43 @@ if (error) {
 Tracebacks are best-effort. A failure with no Python frame (a failed import
 argument check, for example) still yields a message, and `hasTraceback()`
 reports which case you are in.
+
+### Structured frames
+
+`traceback()` is for logging. A console that needs to jump to source reads the
+same exception as data:
+
+| Accessor | Meaning |
+| --- | --- |
+| `Error::exceptionType()` | Python type name, for example `ValueError` |
+| `Error::frames()` | Up to `Error::maxFrames` frames, outermost first |
+
+Each `mais::Error::Frame` carries:
+
+- `file` — the path Python reported, exactly as written in `traceback()`;
+- `line` — the 1-based line, or `0` when Python reported none;
+- `function` — the function name, or `<module>` for module-level code.
+
+```cpp
+if (error) {
+    std::cerr << error.exceptionType() << ": " << error.message() << '\n';
+    for (const mais::Error::Frame &frame : error.frames()) {
+        std::cerr << frame.file << ':' << frame.line << " in "
+                  << frame.function << '\n';
+    }
+}
+```
+
+Frames are copied from the traceback object pybind11 already captured, so
+building them runs no Python code and reads no source file. `frames().back()`
+is the raise site, because the order matches `traceback.format_exception()`.
+
+The cap applies to the structured list only. When a traceback is deeper than
+`Error::maxFrames` (32), the innermost frames are kept so the raise site is
+never lost; `traceback()` is produced exactly as before, including CPython's
+own formatting and any repeated-frame folding. A non-Python error, such as a
+failed path check, has no frames and no exception type; `hasTraceback()`
+continues to report whether formatted text was captured.
 
 ## Native arguments
 

@@ -25,6 +25,7 @@
 #include <gtest/gtest.h>
 
 #include <string>
+#include <vector>
 
 TEST(ErrorTest, DefaultConstructedErrorIsOk)
 {
@@ -35,6 +36,8 @@ TEST(ErrorTest, DefaultConstructedErrorIsOk)
 	EXPECT_EQ(error.code(), mais::ErrorCode::Ok);
 	EXPECT_TRUE(error.message().empty());
 	EXPECT_FALSE(error.hasTraceback());
+	EXPECT_TRUE(error.exceptionType().empty());
+	EXPECT_TRUE(error.frames().empty());
 	EXPECT_EQ(error.toString(), "[Ok]");
 }
 
@@ -47,6 +50,8 @@ TEST(ErrorTest, CarriesAMessage)
 	EXPECT_EQ(error.code(), mais::ErrorCode::ModuleNotFound);
 	EXPECT_EQ(error.message(), "no such module");
 	EXPECT_FALSE(error.hasTraceback());
+	EXPECT_TRUE(error.exceptionType().empty());
+	EXPECT_TRUE(error.frames().empty());
 	EXPECT_EQ(error.toString(), "[ModuleNotFound] no such module");
 }
 
@@ -55,6 +60,34 @@ TEST(ErrorTest, AppendsTheTracebackWhenPresent)
 	mais::Error error(mais::ErrorCode::InvocationFailed, "ValueError: boom",
 					  "Traceback (most recent call last):\nValueError: boom");
 
+	EXPECT_TRUE(error.hasTraceback());
+	EXPECT_TRUE(error.exceptionType().empty());
+	EXPECT_TRUE(error.frames().empty());
+	EXPECT_EQ(error.toString(),
+			  "[InvocationFailed] ValueError: boom\n"
+			  "Traceback (most recent call last):\nValueError: boom");
+}
+
+TEST(ErrorTest, CarriesPythonContextWithoutChangingToString)
+{
+	const std::vector<mais::Error::Frame> frames = {
+		{ "game.py", 12, "on_update" },
+		{ "engine.py", 4, "step" },
+	};
+
+	mais::Error error(mais::ErrorCode::InvocationFailed, "ValueError: boom",
+					  "Traceback (most recent call last):\n"
+					  "ValueError: boom",
+					  "ValueError", frames);
+
+	EXPECT_EQ(error.exceptionType(), "ValueError");
+	ASSERT_EQ(error.frames().size(), 2U);
+	EXPECT_EQ(error.frames()[0].file, "game.py");
+	EXPECT_EQ(error.frames()[0].line, 12U);
+	EXPECT_EQ(error.frames()[0].function, "on_update");
+	EXPECT_EQ(error.frames()[1].file, "engine.py");
+	EXPECT_EQ(error.frames()[1].line, 4U);
+	EXPECT_EQ(error.frames()[1].function, "step");
 	EXPECT_TRUE(error.hasTraceback());
 	EXPECT_EQ(error.toString(),
 			  "[InvocationFailed] ValueError: boom\n"
