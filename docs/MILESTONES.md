@@ -92,7 +92,7 @@ interpretation, UI widgets, and anything owned by `guillaume`.
       `headers/mais/`.
 - [ ] A caller can read a value a script returned.
 - [ ] A module's functions can be listed without invoking them.
-- [ ] A failing `on_update` does not stop the host loop, and its cost is
+- [x] A failing `on_update` does not stop the host loop, and its cost is
       attributable to that hook.
 - [ ] A consumer can address an individual traceback frame.
 - [ ] The GIL/threading model is written down and matches the implementation.

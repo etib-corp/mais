@@ -31,6 +31,10 @@ Do not require an `IEngine` interface in the generic scripting API for a single 
 - Access Python objects while holding the GIL. Run script callbacks on a known thread unless a deliberate cross-thread dispatch model is implemented.
 - Drop Python callbacks and wrappers before interpreter finalization, and finalize the interpreter before destroying native objects they can reference.
 - C++ owns the application's main loop. Scripts execute at host-defined points; avoid giving Python an uncontrolled blocking `run()` entry point.
+- Failure policy and timing belong to the runtime, not to each consumer: the per-call
+  `FailurePolicy` and the measured `CallReport` keep the same continue/stop/report-once
+  decision out of every host. The host still owns the loop and the shutdown order, so
+  `Stop` only asks it to leave the loop; maïs never stops the interpreter on its own.
 
 ## Configuration strategy
 

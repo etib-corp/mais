@@ -13,3 +13,7 @@ def with_delta(delta_seconds):
 
 def tick():
     host.counter.value += 1
+
+
+def explode():
+    raise ValueError("benchmark boom")

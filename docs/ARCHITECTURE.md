@@ -90,7 +90,7 @@ sequenceDiagram
     Host->>Engine: destroy engine
 ```
 
-The names `configure`, `on_start`, `on_update`, and `on_shutdown` are example host-defined hooks, not a promise that they already exist. The exact position of `on_update` relative to engine updates and rendering must be specified by each consumer. Script errors should reach the host with traceback context and an explicit policy for continuing or stopping.
+The names `configure`, `on_start`, `on_update`, and `on_shutdown` are example host-defined hooks, not a promise that they already exist. The exact position of `on_update` relative to engine updates and rendering must be specified by each consumer. Script errors reach the host with traceback context and a per-call `FailurePolicy` (`Continue`, `Stop`, `ReportOnce`), so continuing or stopping is one decision the host makes instead of an `if` around every call; see [ERROR_HANDLING.md](ERROR_HANDLING.md#call-policy-and-timing).
 
 ## Engine integration
 

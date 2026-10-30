@@ -141,3 +141,72 @@ TEST(LifecycleTest, SearchPathsSurviveARestart)
 	ASSERT_TRUE(runtime.shutdown().isOk());
 	EXPECT_EQ(runtime.searchPaths().size(), 1U);
 }
+
+TEST(LifecycleTest, FailureCountersResetOnShutdown)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeCounter counter("policy-restart");
+
+	mais_test::bindFakeHost(runtime, counter);
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+
+	for (int round = 0; round < 3; ++round) {
+		ASSERT_TRUE(runtime.initialize().isOk()) << "round " << round;
+		ASSERT_TRUE(runtime.loadModule("fake_host").isOk())
+			<< "round " << round;
+
+		// Every round starts with a clean slate: the first failure is
+		// reported, not suppressed by the previous run.
+		mais::CallReport first = runtime.call(mais::FailurePolicy::ReportOnce,
+											  "fake_host", "explode");
+		EXPECT_FALSE(first.isOk()) << "round " << round;
+		EXPECT_FALSE(first.suppressed) << "round " << round;
+		EXPECT_EQ(first.consecutiveFailures, 1U) << "round " << round;
+
+		mais::CallReport repeat = runtime.call(mais::FailurePolicy::ReportOnce,
+											   "fake_host", "explode");
+		EXPECT_TRUE(repeat.isOk()) << "round " << round;
+		EXPECT_TRUE(repeat.suppressed) << "round " << round;
+		EXPECT_EQ(repeat.consecutiveFailures, 2U) << "round " << round;
+
+		ASSERT_TRUE(runtime.shutdown().isOk()) << "round " << round;
+	}
+}
+
+TEST(LifecycleTest, DestructorAlsoClearsFailureCounters)
+{
+	mais_test::FakeCounter counter("policy-destructor");
+	{
+		mais::ScriptRuntime runtime;
+
+		mais_test::bindFakeHost(runtime, counter);
+		ASSERT_TRUE(runtime.initialize().isOk());
+		ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+		ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+
+		mais::CallReport failure = runtime.call(mais::FailurePolicy::ReportOnce,
+												"fake_host", "explode");
+		ASSERT_FALSE(failure.isOk());
+		ASSERT_TRUE(
+			runtime
+				.call(mais::FailurePolicy::ReportOnce, "fake_host", "explode")
+				.suppressed);
+	}
+
+	// A new runtime never inherits the old counters, even though the previous
+	// one was only destroyed rather than shut down.
+	mais::ScriptRuntime replacement;
+
+	mais_test::bindFakeHost(replacement, counter);
+	ASSERT_TRUE(replacement.initialize().isOk());
+	ASSERT_TRUE(replacement.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(replacement.loadModule("fake_host").isOk());
+
+	mais::CallReport failure = replacement.call(mais::FailurePolicy::ReportOnce,
+												"fake_host", "explode");
+	EXPECT_FALSE(failure.isOk());
+	EXPECT_FALSE(failure.suppressed);
+	EXPECT_EQ(failure.consecutiveFailures, 1U);
+
+	ASSERT_TRUE(replacement.shutdown().isOk());
+}

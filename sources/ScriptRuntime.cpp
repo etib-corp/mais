@@ -28,6 +28,7 @@
 #include <frameobject.h>
 
 #include <algorithm>
+#include <chrono>
 #include <concepts>
 #include <cstdint>
 #include <cstddef>
@@ -305,6 +306,41 @@ namespace mais
 								  + expectedTypeName<T>() + " was requested"));
 			}
 		}
+
+		/// \brief Key of the per-hook failure counters.
+		///
+		/// A unit separator cannot appear in a Python identifier, so the pair
+		/// cannot collide with another module/function combination.
+		std::string hookKey(std::string_view moduleName,
+							std::string_view functionName)
+		{
+			std::string key;
+
+			key.reserve(moduleName.size() + functionName.size() + 1);
+			key.append(moduleName);
+			key.push_back('\x1f');
+			key.append(functionName);
+			return key;
+		}
+
+		/// \brief Identity of a failure for FailurePolicy::ReportOnce.
+		///
+		/// Two failures are the same failure when they share an ErrorCode, a
+		/// Python exception type, and a message. The traceback is excluded on
+		/// purpose: a line can move while the failure stays the same.
+		std::string failureSignature(const Error &failure)
+		{
+			std::string signature;
+
+			signature.reserve(failure.message().size()
+							  + failure.exceptionType().size() + 32);
+			signature.append(errorCodeName(failure.code()));
+			signature.push_back('\x1f');
+			signature.append(failure.exceptionType());
+			signature.push_back('\x1f');
+			signature.append(failure.message());
+			return signature;
+		}
 	}	 // namespace
 
 	struct ScriptRuntime::Impl {
@@ -326,6 +362,59 @@ namespace mais
 		/// The `traceback` module, imported once in initialize() so that
 		/// reporting a failure never imports anything while handling one.
 		py::object tracebackModule;
+
+		/// \brief Failure accounting for one hook in the current run.
+		struct FailureRecord {
+			/// Consecutive failures, reset by a successful call.
+			std::uint64_t consecutiveFailures = 0;
+
+			/// Error code, exception type, and message of the last failure.
+			std::string lastSignature;
+		};
+
+		/// \brief Per-hook failure counters, keyed by module and function.
+		///
+		/// Cleared by stop(), so a restart starts from zero and never inherits
+		/// a suppression from the previous run.
+		std::unordered_map<std::string, FailureRecord> failureRecords;
+
+		/// \brief Result of booking one failed call.
+		struct FailureVisit {
+			/// Failures of this hook since its last success.
+			std::uint64_t consecutiveFailures = 0;
+
+			/// True when this failure matches the previous one exactly.
+			bool repeated = false;
+		};
+
+		/// Counts one failure for `moduleName.functionName`.
+		[[nodiscard]] FailureVisit noteFailure(std::string_view moduleName,
+											   std::string_view functionName,
+											   const Error &failure)
+		{
+			FailureRecord &record =
+				failureRecords[hookKey(moduleName, functionName)];
+
+			++record.consecutiveFailures;
+
+			std::string signature = failureSignature(failure);
+			const bool repeated	  = signature == record.lastSignature;
+
+			record.lastSignature = std::move(signature);
+			return FailureVisit { record.consecutiveFailures, repeated };
+		}
+
+		/// \brief Ends a hook's failure streak after a successful call.
+		///
+		/// A successful call is the common case, so the empty-map check keeps
+		/// the fast path free of key construction and hashing.
+		void noteSuccess(std::string_view moduleName,
+						 std::string_view functionName)
+		{
+			if (!failureRecords.empty()) {
+				failureRecords.erase(hookKey(moduleName, functionName));
+			}
+		}
 
 		/// Builds an Error carrying the Python message, traceback, exception
 		/// type, and structured frames.
@@ -428,7 +517,7 @@ namespace mais
 					py::error_already_set pythonError;
 					Error failure = fromPythonError(pythonError);
 
-					error		  = withDiagnostics(
+					error = withDiagnostics(
 						failure,
 						"argument " + std::to_string(index)
 							+ " could not be converted to Python: "
@@ -514,6 +603,10 @@ namespace mais
 		/// Releases Python references, then finalizes the interpreter.
 		void stop() noexcept
 		{
+			// Failure counters belong to one run: a restart must not inherit a
+			// suppression from the previous one.
+			failureRecords.clear();
+
 			// Python objects must be dropped while the interpreter is alive, so
 			// the module table is emptied before finalization.
 			modules.clear();
@@ -683,7 +776,22 @@ namespace mais
 			CallOutcome outcome =
 				invoke(std::string(moduleName), std::string(functionName),
 					   arguments, optional);
+			noteOutcome(moduleName, functionName, outcome.error);
 			return std::move(outcome.error);
+		}
+
+		/// Keeps the per-hook counters truthful across every overload: a
+		/// success ends the streak, a failure advances it. Only the
+		/// policy-bearing overloads use the result to suppress a report.
+		void noteOutcome(std::string_view moduleName,
+						 std::string_view functionName, const Error &error)
+		{
+			if (error.isOk()) {
+				noteSuccess(moduleName, functionName);
+			} else {
+				// The counters advance; only a policy-bearing call acts on it.
+				(void)noteFailure(moduleName, functionName, error);
+			}
 		}
 
 		/// Implements the typed call() and callOptional() overloads.
@@ -703,15 +811,84 @@ namespace mais
 				invoke(std::string(moduleName), std::string(functionName),
 					   arguments, optional);
 			if (outcome.error) {
+				noteOutcome(moduleName, functionName, outcome.error);
 				return Result<T>(std::move(outcome.error));
 			}
 			if (!outcome.value || outcome.value.is_none()) {
+				noteSuccess(moduleName, functionName);
 				return Result<T>::none();
 			}
 
 			const std::string context =
 				std::string(moduleName) + "." + std::string(functionName);
-			return convertReturnValue<T>(outcome.value, context);
+			Result<T> converted = convertReturnValue<T>(outcome.value, context);
+
+			// A wrong return type is a failure of the call too, so the streak
+			// stays truthful whichever overload the host used.
+			noteOutcome(moduleName, functionName, converted.error());
+			return converted;
+		}
+
+		/// \brief Implements the policy-bearing call() and callOptional()
+		/// overloads.
+		///
+		/// The clock spans validation, argument conversion, the Python call,
+		/// and the capture of its failure, so `duration` is the cost the host
+		/// actually pays for that hook.
+		[[nodiscard]] CallReport
+			callWithPolicy(FailurePolicy policy, std::string_view moduleName,
+						   std::string_view functionName,
+						   const std::vector<ScriptArgument> &arguments,
+						   bool optional)
+		{
+			CallReport report;
+			const auto started = std::chrono::steady_clock::now();
+
+			Error invalid = validateCall(moduleName, functionName);
+			// The call was rejected before the hook ran, so there is no hook
+			// failure to count.
+			const bool rejected = !invalid.isOk();
+
+			if (rejected) {
+				report.error = std::move(invalid);
+			} else {
+				py::gil_scoped_acquire gil;
+				CallOutcome outcome =
+					invoke(std::string(moduleName), std::string(functionName),
+						   arguments, optional);
+
+				report.error = std::move(outcome.error);
+			}
+
+			report.duration =
+				std::chrono::duration_cast<std::chrono::nanoseconds>(
+					std::chrono::steady_clock::now() - started);
+
+			if (report.error.isOk()) {
+				noteSuccess(moduleName, functionName);
+				return report;
+			}
+
+			// The host asked for Stop, and the runtime only advises: it never
+			// leaves the loop or stops the interpreter on its own.
+			report.stopRequested = policy == FailurePolicy::Stop;
+
+			if (rejected) {
+				// API misuse, not a failing hook: reported, never counted, so a
+				// misspelled name cannot consume a hook's one report.
+				return report;
+			}
+
+			const FailureVisit visit =
+				noteFailure(moduleName, functionName, report.error);
+
+			report.consecutiveFailures = visit.consecutiveFailures;
+
+			if (policy == FailurePolicy::ReportOnce && visit.repeated) {
+				report.suppressed = true;
+				report.error	  = Error::ok();
+			}
+			return report;
 		}
 	};
 
@@ -820,6 +997,10 @@ namespace mais
 				"a Python interpreter is already running in this process; "
 				"maïs owns its own interpreter exclusively");
 		}
+
+		// A run always starts from zero, so a suppression never survives a
+		// restart. shutdown() clears the same counters when the run ends.
+		_impl->failureRecords.clear();
 
 		try {
 			// Signal handlers belong to the host, so they are left untouched,
@@ -1070,6 +1251,42 @@ namespace mais
 	{
 		return _impl->callImpl(moduleName, functionName,
 							   std::vector<ScriptArgument>(arguments), true);
+	}
+
+	CallReport ScriptRuntime::call(FailurePolicy policy,
+								   std::string_view moduleName,
+								   std::string_view functionName)
+	{
+		return _impl->callWithPolicy(policy, moduleName, functionName, {},
+									 false);
+	}
+
+	CallReport
+		ScriptRuntime::call(FailurePolicy policy, std::string_view moduleName,
+							std::string_view functionName,
+							std::initializer_list<ScriptArgument> arguments)
+	{
+		return _impl->callWithPolicy(policy, moduleName, functionName,
+									 std::vector<ScriptArgument>(arguments),
+									 false);
+	}
+
+	CallReport ScriptRuntime::callOptional(FailurePolicy policy,
+										   std::string_view moduleName,
+										   std::string_view functionName)
+	{
+		return _impl->callWithPolicy(policy, moduleName, functionName, {},
+									 true);
+	}
+
+	CallReport ScriptRuntime::callOptional(
+		FailurePolicy policy, std::string_view moduleName,
+		std::string_view functionName,
+		std::initializer_list<ScriptArgument> arguments)
+	{
+		return _impl->callWithPolicy(policy, moduleName, functionName,
+									 std::vector<ScriptArgument>(arguments),
+									 true);
 	}
 
 	template<ScriptReturnType T>
