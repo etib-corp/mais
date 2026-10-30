@@ -428,7 +428,7 @@ namespace mais
 					py::error_already_set pythonError;
 					Error failure = fromPythonError(pythonError);
 
-					error		  = withDiagnostics(
+					error = withDiagnostics(
 						failure,
 						"argument " + std::to_string(index)
 							+ " could not be converted to Python: "
