@@ -90,6 +90,12 @@ if(NOT BUILD_DOCS_ONLY)
         "${MAIS_PYBIND11_VERSION}"
     )
 
+    # Reject an unsupported interpreter while the range is still actionable.
+    # pybind11 has just resolved Python, so the check can name both the
+    # supported range and the interpreter that was actually selected.
+    include(cmake/PythonSupport.cmake)
+    mais_require_supported_python()
+
     # 05. Library definition
     include(cmake/Sources.cmake)
 
