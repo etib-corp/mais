@@ -88,6 +88,23 @@ maïs enforces: any function in any loaded module can be invoked.
 hook needs. `call` reports `FunctionNotFound` instead, so a misspelled hook is
 not silently ignored.
 
+A long session gives a hook a policy instead of an `if` per call. Pass a
+`mais::FailurePolicy` and read the returned `mais::CallReport`, which also
+carries the duration the runtime measured for that call:
+
+```cpp
+mais::CallReport report = runtime.callOptional(
+    mais::FailurePolicy::ReportOnce, "game", "on_update",
+    {mais::ScriptArgument::number(deltaSeconds)});
+if (report) {
+    std::cerr << report.error.toString() << '\n';  // once per failure streak
+}
+console.timing("on_update", report.duration);
+```
+
+`ReportOnce` suppresses an identical repeated failure, `Stop` asks the host to
+leave its loop, and `Continue` keeps 1.0.0's report-every-failure behaviour.
+
 ## Building
 
 Requirements are CMake 3.20 or newer, a C++20 compiler, and a Python

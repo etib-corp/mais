@@ -112,7 +112,7 @@ def on_update(delta_seconds):
 Arguments are scalars only (`int`, `float`, `bool`, `str`) in this version, so a
 hook that needs a native object reads it from the host module instead of
 receiving it as a parameter. The same four types can be read back from a call;
-see [section 6](#6-read-a-value-back).
+see [section 7](#7-read-a-value-back).
 
 ## 5. Report failures with the traceback
 
@@ -131,7 +131,41 @@ if (mais::Error error = runtime.call("game", "on_update"); error) {
 `callOptional` hides only the "function does not exist" case; a hook that exists
 and raises still reports its failure.
 
-## 6. Read a value back
+## 6. Give a long session a failure policy
+
+Section 5 reports every failure. A session that runs for hours usually wants
+one decision instead, plus a number it can attribute to the hook. Pass a
+`mais::FailurePolicy` first and read the returned `mais::CallReport`:
+
+```cpp
+mais::CallReport report = runtime.callOptional(
+    mais::FailurePolicy::ReportOnce, "game", "on_update",
+    {mais::ScriptArgument::number(clock.deltaSeconds)});
+
+if (report.stopRequested) {
+    break;                                        // only under Stop
+}
+if (report) {
+    std::cerr << report.error.toString() << '\n';  // once per streak
+}
+console.timing("on_update", report.duration);
+```
+
+| Policy | A failing call | A successful call |
+| --- | --- | --- |
+| `Continue` | the error, every time | `isOk()` |
+| `Stop` | the error, with `stopRequested` | `isOk()` |
+| `ReportOnce` | the error once, then `isOk()` with `suppressed` | `isOk()` |
+
+A failure repeats when the same hook fails consecutively with the same error
+code, Python exception type, and message. A successful call ends the streak,
+and `initialize()`/`shutdown()` clear every counter, so a restart reports the
+same failure again. `CallReport::duration` is the time the runtime measured for
+that call, which is what a console charts per hook. See
+[Call policy and timing](./ERROR_HANDLING.md#call-policy-and-timing) for the
+full rules.
+
+## 7. Read a value back
 
 Typed overloads of `call()` and `callOptional()` read what a script returns.
 `T` is one of `bool`, `std::int64_t`, `double`, or `std::string` — the same
@@ -166,7 +200,7 @@ A `mais::Result<T>` has three states:
   Python type reports `TypeMismatch` with the function name, the returned type,
   and the requested one, instead of converting silently.
 
-## 7. Stop before destroying host objects
+## 8. Stop before destroying host objects
 
 The interpreter must outlive every Python reference to a native object, so shut
 the runtime down before those objects are destroyed:

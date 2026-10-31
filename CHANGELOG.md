@@ -15,6 +15,15 @@ as part of this scripting library. 1.0.0 is the first release of this runtime.
 - `mais::ScriptRuntime`, the host-facing entry point: interpreter lifecycle
   (`initialize()`/`shutdown()`), validated script search paths, module loading,
   and hook invocation through `call()` and `callOptional()`.
+- `mais::FailurePolicy` (`Continue`, `Stop`, `ReportOnce`) and
+  `mais::CallReport`: the policy-bearing `call()`/`callOptional()` overloads
+  measure each call with a monotonic clock and report the duration, so a console
+  can attribute cost to a hook. `ReportOnce` reports a repeated identical
+  failure of the same hook once per run and returns `Ok` with `suppressed` for
+  the repeats; `Stop` sets `stopRequested` without stopping the interpreter.
+  Counters reset on `initialize()`/`shutdown()`, a successful call ends a
+  streak, and the `Error`-returning overloads keep their previous behaviour and
+  per-call cost.
 - `mais::Result<T>` and typed `call<T>()` / `callOptional<T>()` overloads: a
   script's `bool`, integer, float, or string return value can be read back
   without changing the 1.0.0 signatures. A `None` result is a successful call

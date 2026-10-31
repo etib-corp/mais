@@ -26,6 +26,7 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -1160,4 +1161,255 @@ TEST(ResultTest, CarriesAValueOrAnError)
 	EXPECT_FALSE(failure.isOk());
 	EXPECT_FALSE(failure.hasValue());
 	EXPECT_EQ(failure.error().code(), mais::ErrorCode::TypeMismatch);
+}
+
+TEST(CallPolicyTest, KeepsReportingEveryFailureByDefault)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeCounter counter("policy-default");
+
+	mais_test::bindFakeHost(runtime, counter);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+
+	// The Error-returning overload keeps 1.0.0's behaviour: no suppression,
+	// no fatal code, and the host loop is untouched.
+	for (int attempt = 0; attempt < 5; ++attempt) {
+		mais::Error error = runtime.call("fake_host", "explode");
+		EXPECT_EQ(error.code(), mais::ErrorCode::InvocationFailed)
+			<< "attempt " << attempt;
+		EXPECT_TRUE(mais::isRecoverable(error.code()));
+	}
+
+	mais::CallReport report =
+		runtime.call(mais::FailurePolicy::Continue, "fake_host", "explode");
+	EXPECT_FALSE(report.isOk());
+	EXPECT_FALSE(report.suppressed);
+	EXPECT_FALSE(report.stopRequested);
+	EXPECT_EQ(report.consecutiveFailures, 6U);
+	EXPECT_TRUE(runtime.isRunning());
+
+	ASSERT_TRUE(runtime.call("fake_host", "bump").isOk());
+	EXPECT_EQ(counter.count(), 1);
+}
+
+TEST(CallPolicyTest, ReportsIdenticalRepeatsOnlyOnce)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeCounter counter("policy-report-once");
+
+	mais_test::bindFakeHost(runtime, counter);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+
+	const auto failWith = [&runtime](const std::string &reason) {
+		return runtime.call(mais::FailurePolicy::ReportOnce, "fake_host",
+							"explode_with",
+							{ mais::ScriptArgument::string(reason) });
+	};
+
+	mais::CallReport first = failWith("same reason");
+	ASSERT_FALSE(first.isOk());
+	EXPECT_EQ(first.error.code(), mais::ErrorCode::InvocationFailed);
+	EXPECT_NE(first.error.message().find("same reason"), std::string::npos);
+	EXPECT_FALSE(first.suppressed);
+	EXPECT_EQ(first.consecutiveFailures, 1U);
+
+	// The repeats are successful reports: nothing for the host to log, but
+	// the console can still count how many were folded away.
+	for (std::uint64_t attempt = 2; attempt <= 3; ++attempt) {
+		mais::CallReport repeat = failWith("same reason");
+		EXPECT_TRUE(repeat.isOk());
+		EXPECT_TRUE(repeat.suppressed);
+		EXPECT_EQ(repeat.consecutiveFailures, attempt);
+	}
+
+	// A changed message is a different failure of the same hook, so it is
+	// reported again; its own repeats are then folded away.
+	mais::CallReport different = failWith("another reason");
+	ASSERT_FALSE(different.isOk());
+	EXPECT_FALSE(different.suppressed);
+	EXPECT_NE(different.error.message().find("another reason"),
+			  std::string::npos);
+	EXPECT_EQ(different.consecutiveFailures, 4U);
+
+	EXPECT_TRUE(failWith("another reason").suppressed);
+
+	// Another hook keeps its own counters.
+	mais::CallReport other =
+		runtime.call(mais::FailurePolicy::ReportOnce, "fake_host", "explode");
+	ASSERT_FALSE(other.isOk());
+	EXPECT_EQ(other.consecutiveFailures, 1U);
+}
+
+TEST(CallPolicyTest, ReportsTheSameHookAgainAfterARecovery)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeCounter counter("policy-recovery");
+
+	mais_test::bindFakeHost(runtime, counter);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+
+	const auto divide = [&runtime](std::int64_t divisor) {
+		return runtime.call(mais::FailurePolicy::ReportOnce, "fake_host",
+							"divide",
+							{ mais::ScriptArgument::integer(1),
+							  mais::ScriptArgument::integer(divisor) });
+	};
+
+	mais::CallReport first = divide(0);
+	ASSERT_FALSE(first.isOk());
+	EXPECT_EQ(first.error.code(), mais::ErrorCode::InvocationFailed);
+	EXPECT_EQ(first.consecutiveFailures, 1U);
+
+	EXPECT_TRUE(divide(0).suppressed);
+
+	// A successful call of the same hook ends the streak, including one
+	// through a typed overload.
+	mais::Result<double> quotient = runtime.call<double>(
+		"fake_host", "divide",
+		{ mais::ScriptArgument::integer(4), mais::ScriptArgument::integer(2) });
+	ASSERT_TRUE(quotient.isOk()) << quotient.error().toString();
+	ASSERT_TRUE(quotient.hasValue());
+	EXPECT_DOUBLE_EQ(quotient.value(), 2.0);
+
+	mais::CallReport afterRecovery = divide(0);
+	EXPECT_FALSE(afterRecovery.isOk());
+	EXPECT_FALSE(afterRecovery.suppressed);
+	EXPECT_EQ(afterRecovery.consecutiveFailures, 1U);
+	EXPECT_EQ(counter.count(), 0);
+}
+
+TEST(CallPolicyTest, StopPolicyMarksTheReportWithoutStoppingTheRuntime)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeCounter counter("policy-stop");
+
+	mais_test::bindFakeHost(runtime, counter);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+
+	mais::CallReport report =
+		runtime.call(mais::FailurePolicy::Stop, "fake_host", "explode");
+
+	EXPECT_FALSE(report.isOk());
+	EXPECT_TRUE(report.stopRequested);
+	EXPECT_FALSE(report.suppressed);
+	EXPECT_EQ(report.error.code(), mais::ErrorCode::InvocationFailed);
+
+	// The runtime never leaves the loop and never stops the interpreter on its
+	// own; only the host that honoured stopRequested would end the session.
+	EXPECT_TRUE(runtime.isRunning());
+	ASSERT_TRUE(runtime.call("fake_host", "bump").isOk());
+	EXPECT_EQ(counter.count(), 1);
+
+	// The other policies never ask the host to stop, including when
+	// ReportOnce suppresses the repeat.
+	const auto failWith = [&runtime](mais::FailurePolicy policy,
+									 const std::string &reason) {
+		return runtime.call(policy, "fake_host", "explode_with",
+							{ mais::ScriptArgument::string(reason) });
+	};
+
+	EXPECT_FALSE(
+		failWith(mais::FailurePolicy::Continue, "continue").stopRequested);
+
+	mais::CallReport once = failWith(mais::FailurePolicy::ReportOnce, "once");
+	EXPECT_FALSE(once.isOk());
+	EXPECT_FALSE(once.stopRequested);
+
+	mais::CallReport repeat = failWith(mais::FailurePolicy::ReportOnce, "once");
+	EXPECT_TRUE(repeat.suppressed);
+	EXPECT_FALSE(repeat.stopRequested);
+}
+
+TEST(CallPolicyTest, ARepeatedlyFailingHookCannotEndATrackedLoop)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeCounter counter("policy-loop");
+
+	mais_test::bindFakeHost(runtime, counter);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+
+	constexpr int frameCount = 120;
+	std::size_t reported	 = 0;
+	bool askedToStop		 = false;
+
+	// A frame loop that only honours a Stop policy keeps running even though
+	// the hook fails every frame.
+	for (int frame = 0; frame < frameCount; ++frame) {
+		mais::CallReport report = runtime.callOptional(
+			mais::FailurePolicy::ReportOnce, "fake_host", "explode");
+		askedToStop = askedToStop || report.stopRequested;
+		if (report) {
+			++reported;
+		}
+	}
+
+	EXPECT_FALSE(askedToStop);
+	EXPECT_EQ(reported, 1U);
+	EXPECT_TRUE(runtime.isRunning());
+	EXPECT_EQ(counter.count(), 0);
+
+	// The interpreter is still healthy after 120 failures.
+	ASSERT_TRUE(runtime.call("fake_host", "bump").isOk());
+	EXPECT_EQ(counter.count(), 1);
+}
+
+TEST(CallPolicyTest, MeasuresTheDurationOfTheCall)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeCounter counter("policy-timing");
+
+	mais_test::bindFakeHost(runtime, counter);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+
+	mais::CallReport slept =
+		runtime.call(mais::FailurePolicy::Continue, "fake_host", "sleep_ms",
+					 { mais::ScriptArgument::integer(10) });
+
+	ASSERT_TRUE(slept.isOk()) << slept.error.toString();
+	EXPECT_GE(slept.duration, std::chrono::milliseconds(10));
+
+	mais::CallReport failed =
+		runtime.call(mais::FailurePolicy::Continue, "fake_host", "explode");
+	EXPECT_FALSE(failed.isOk());
+	EXPECT_GT(failed.duration.count(), 0);
+}
+
+TEST(CallPolicyTest, DoesNotCountCallsRejectedBeforeTheHookRuns)
+{
+	mais::ScriptRuntime runtime;
+
+	mais::CallReport report =
+		runtime.call(mais::FailurePolicy::Stop, "fake_host", "bump");
+
+	EXPECT_EQ(report.error.code(), mais::ErrorCode::NotInitialized);
+	EXPECT_TRUE(report.stopRequested);
+	EXPECT_EQ(report.consecutiveFailures, 0U);
+	EXPECT_FALSE(report.suppressed);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+
+	mais::CallReport unnamed = runtime.call(mais::FailurePolicy::ReportOnce,
+											"fake_host", std::string_view());
+	EXPECT_EQ(unnamed.error.code(), mais::ErrorCode::InvalidArgument);
+	EXPECT_EQ(unnamed.consecutiveFailures, 0U);
+
+	ASSERT_TRUE(runtime.shutdown().isOk());
 }

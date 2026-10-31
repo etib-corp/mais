@@ -27,6 +27,7 @@
 
 #include <benchmark/benchmark.h>
 
+#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <string>
@@ -106,6 +107,51 @@ static void BM_CallThatInvokesAHostBinding(benchmark::State &state)
 	}
 }
 BENCHMARK(BM_CallThatInvokesAHostBinding);
+
+/// \brief Reports the duration the runtime measured for a successful call.
+///
+/// The counter is the number a console would display, so a regression in it is
+/// visible next to Google Benchmark's own wall-clock time instead of being
+/// assumed from the call count.
+static void BM_CallWithReportedTiming(benchmark::State &state)
+{
+	std::chrono::nanoseconds total { 0 };
+
+	for (auto _: state) {
+		mais::CallReport report =
+			gRuntime->call(mais::FailurePolicy::Continue, "bench", "noop");
+		benchmark::DoNotOptimize(report);
+		total += report.duration;
+	}
+
+	const double iterations =
+		state.iterations() > 0 ? static_cast<double>(state.iterations()) : 1.0;
+
+	state.counters["runtime_ns_per_call"] =
+		benchmark::Counter(static_cast<double>(total.count()) / iterations);
+}
+BENCHMARK(BM_CallWithReportedTiming);
+
+/// \brief Reports the duration of a call that raises, including the traceback
+/// the host receives.
+static void BM_FailingCallWithReportedTiming(benchmark::State &state)
+{
+	std::chrono::nanoseconds total { 0 };
+
+	for (auto _: state) {
+		mais::CallReport report =
+			gRuntime->call(mais::FailurePolicy::Continue, "bench", "explode");
+		benchmark::DoNotOptimize(report);
+		total += report.duration;
+	}
+
+	const double iterations =
+		state.iterations() > 0 ? static_cast<double>(state.iterations()) : 1.0;
+
+	state.counters["runtime_ns_per_call"] =
+		benchmark::Counter(static_cast<double>(total.count()) / iterations);
+}
+BENCHMARK(BM_FailingCallWithReportedTiming);
 
 int main(int argc, char **argv)
 {
