@@ -76,6 +76,17 @@ as part of this scripting library. 1.0.0 is the first release of this runtime.
   stopped rather than handing the host a half-configured runtime.
 - Documentation rewritten around the scripting lifecycle: host-owned objects,
   binding ordering, GIL and thread affinity, and shutdown ordering.
+- Python support is an explicit, tested range: 3.9 – 3.14 on Linux, macOS, and
+  Windows, declared once in `cmake/PythonSupport.cmake`. Configuration now
+  rejects an interpreter outside that range with a message naming the range and
+  the interpreter that was selected, instead of failing deeper inside pybind11.
+  The CI build matrix is generated from the same file, so the versions CI tests
+  and the versions `configure` accepts cannot drift apart. Windows and Linux are
+  now built and tested as well, each on every supported Python version.
+- Python is installed from `actions/setup-python` on all three CI platforms,
+  and the Linux job no longer installs the distro `python3-dev` alongside it.
+  Mixing the two left discovery able to resolve the interpreter and the linked
+  library to different Python installations.
 
 ### Removed
 

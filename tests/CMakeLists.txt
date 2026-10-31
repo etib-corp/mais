@@ -60,6 +60,16 @@ add_test(NAME mais_unit_tests
     COMMAND test_${PROJECT_NAME} --gtest_fail_if_no_test_linked
 )
 
+# The supported Python range is declared once, in cmake/PythonSupport.cmake.
+# This exercises the guard that enforces it, so a stale range or a message that
+# stops naming the supported versions fails here rather than going unnoticed
+# until someone configures against an unsupported interpreter.
+add_test(NAME python_support_guard
+    COMMAND ${CMAKE_COMMAND}
+        -DMAIS_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/test_python_support.cmake
+)
+
 # The public headers must compile without pybind11 or Python.h. This target
 # deliberately sees only headers/ and links nothing, so an accidental pybind11
 # include in a public header fails the build here rather than at a consumer.

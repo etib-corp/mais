@@ -88,9 +88,26 @@ maïs enforces: any function in any loaded module can be invoked.
 hook needs. `call` reports `FunctionNotFound` instead, so a misspelled hook is
 not silently ignored.
 
+## Supported platforms
+
+maïs is built and tested on every combination below, and only those. Anything
+else is unvalidated, so `cmake` configuration rejects an interpreter outside the
+range with a message naming it instead of failing later inside pybind11.
+
+| Platform | CI image | Python |
+| --- | --- | --- |
+| Linux | `ubuntu-24.04` | 3.9, 3.10, 3.11, 3.12, 3.13, 3.14 |
+| macOS | `macos-latest` (arm64) | 3.9, 3.10, 3.11, 3.12, 3.13, 3.14 |
+| Windows | `windows-latest` (x86_64) | 3.9, 3.10, 3.11, 3.12, 3.13, 3.14 |
+
+[`cmake/PythonSupport.cmake`](cmake/PythonSupport.cmake) is the single
+declaration of that range: configuration refuses anything outside it, and the
+CI matrix is generated from it, so this table, the workflow, and `configure`
+cannot disagree. `docs/VERSIONING.md` describes how the range changes.
+
 ## Building
 
-Requirements are CMake 3.20 or newer, a C++20 compiler, and a Python
+Requirements are CMake 3.20 or newer, a C++20 compiler, and a Python 3.9 – 3.14
 installation with development files — headers and the embeddable library, which
 is `python3-dev` on Debian and Ubuntu. pybind11 is fetched automatically when it
 is not already installed. No Vulkan SDK, OpenXR, GLFW, or engine-specific
