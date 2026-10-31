@@ -53,6 +53,14 @@ as part of this scripting library. 1.0.0 is the first release of this runtime.
   including a full round trip where Python calls back into a host binding.
 - Install/export rules so an external project can `find_package(mais)` and link
   `mais::mais`, verified against a separate consumer.
+- `./scripts/check-boundaries.sh`, one command that fails when the library
+  crosses its dependency boundary: `headers/` and `sources/` may include only
+  the standard library, CPython, pybind11, and maïs's own headers, and the
+  `mais` target may link only `pybind11::embed` and the Python runtime. The link
+  half also runs during every configure (`MAIS_CHECK_BOUNDARIES`, on by
+  default), so a consumer that adds a dependency to the target fails its own
+  build. `--verify` proves the gate still rejects both kinds of violation, and
+  a `Boundaries` workflow runs it in CI.
 
 ### Changed
 

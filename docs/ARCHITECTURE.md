@@ -110,6 +110,25 @@ maïs does not contain `Panel`, `Button`, `Console`, `EngineSettings`, or `Scene
 - Keep engine adapters and consumer scripts out of the core target.
 - Do not introduce the old renderer project's GLFW/OpenXR/Vulkan platform matrix into maïs. Support for particular operating systems and Python versions should be documented only after validation.
 
+### Enforcing the boundary
+
+`./scripts/check-boundaries.sh` is the single command, run unchanged by CI, that
+verifies this document rather than trusting review:
+
+- `headers/` and `sources/` may include only the C++ standard library, CPython's
+  C API, pybind11, and maïs's own headers. The scan reads `#include` directives
+  only, so comments and documentation may discuss `evan` and `guillaume`.
+- A standalone configure, with no consumer present, fails unless the `mais`
+  target's transitive link interface stays within `pybind11::embed` and the
+  Python runtime that pybind11 exposes. The same check runs during every
+  configure (`MAIS_CHECK_BOUNDARIES`, on by default), so a consumer that adds a
+  dependency to the target after `add_subdirectory()` fails its own build.
+
+Both halves are default-deny: a dependency that has not been explicitly approved
+is rejected, whether or not the check knows its name. `--verify` proves the gate
+still rejects a forbidden include, a dependency a consumer pushes into the
+target, and a dependency hidden behind the approved pybind11 target.
+
 ## Design goal
 
 Make Python scripting reusable across applications without turning maïs into an engine framework. The application controls native state and scheduling; maïs supplies a predictable, testable scripting boundary.
