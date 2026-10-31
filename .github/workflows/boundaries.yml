@@ -1,0 +1,24 @@
+name: Boundaries
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  boundaries:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Install Ubuntu dependencies
+        run: bash scripts/install_ubuntu_dependencies.sh
+
+      # One command for both halves of the gate. --verify also injects a
+      # forbidden include and a consumer that pushes a dependency into the
+      # target, and fails unless both are rejected: a gate that accepts
+      # everything must not look the same as a gate that passes.
+      - name: Check the library boundary
+        run: ./scripts/check-boundaries.sh --verify

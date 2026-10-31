@@ -30,6 +30,10 @@ option(BUILD_ALL_DOCS "Build documentation for all libraries" OFF)
 option(DEV_MODE "Enable development mode (extra warnings, warnings as errors)" OFF)
 option(MAIS_FETCH_PYBIND11 "Fetch pybind11 when it is not installed" ON)
 option(MAIS_FETCH_GOOGLETEST "Fetch GoogleTest when it is not installed" ON)
+option(MAIS_CHECK_BOUNDARIES
+    "Fail configuration when maïs links anything but pybind11 and Python"
+    ON
+)
 
 if(BUILD_DOCS_ONLY)
     set(BUILD_DOCS ON)
@@ -127,6 +131,15 @@ if(NOT BUILD_DOCS_ONLY)
         PRIVATE
             pybind11::embed
     )
+
+    # The same boundary enforced as a configure-time gate: the link interface
+    # may only reach pybind11 and the Python runtime. It runs at the end of the
+    # top-level directory, so a consumer that adds a dependency to this target
+    # after add_subdirectory() is caught too. See cmake/CheckBoundaries.cmake.
+    if(MAIS_CHECK_BOUNDARIES)
+        include(cmake/CheckBoundaries.cmake)
+        mais_schedule_boundary_check(${PROJECT_NAME})
+    endif()
 
     # 09. Packaging & consumability
 

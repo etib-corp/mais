@@ -25,6 +25,8 @@ maïs -X-> guillaume / evan / application UI
  evan -X-> maïs
 ```
 
+The arrows above are checked, not merely documented: `./scripts/check-boundaries.sh` fails when an include in `headers/` or `sources/` reaches outside the standard library, CPython, pybind11, and maïs's own headers, and when the `mais` target's transitive link interface reaches past pybind11 and the Python runtime. The check is default-deny, so it rejects the next engine or UI toolkit without being told its name.
+
 ## Implementation status and assumptions
 
 This file describes the target architecture, not verified repository state. Before making edits, inspect the actual source tree, CMake targets, C++ standard, formatting rules, tests, supported platforms, and existing APIs. The original document stated C++20, CMake 3.10+, FetchContent, GoogleTest, and specific paths/scripts; keep those conventions only where confirmed by this repository. Do not assume the old Vulkan SDK setup, Android configuration, or platform/backend validation applies to the scripting library.
@@ -97,6 +99,15 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
+The dependency boundary is enforced by one command, which CI runs unchanged:
+
+```bash
+./scripts/check-boundaries.sh            # the gate
+./scripts/check-boundaries.sh --verify   # the gate, plus a check that it rejects violations
+```
+
+It scans `headers/` and `sources/` for includes outside the approved set, then configures the library on its own — no consumer, engine, or UI present — and fails if the `mais` target's transitive link interface reaches anything but pybind11 and the Python runtime. The link half also runs during every configure because `MAIS_CHECK_BOUNDARIES` defaults to `ON`, so a consumer that adds a dependency to the target after `add_subdirectory()` fails its own build. Both halves are default-deny: a dependency that has not been explicitly approved is rejected without the check having to know its name.
+
 These commands are a baseline, not a claim that the current repository already configures successfully with these flags. If the project retains a formatting helper such as `./scripts/run-clang-format.sh`, use it; otherwise follow the checked-in formatting configuration.
 
 ## Editing boundaries
@@ -112,7 +123,7 @@ These commands are a baseline, not a claim that the current repository already c
 - [ ] Builds and tests independently of `guillaume` and `evan`.
 - [ ] A fake-host test covers binding registration, script invocation, and Python traceback reporting.
 - [ ] Interpreter, GIL, object ownership, and shutdown behavior are documented and tested.
-- [ ] No consumer/engine/UI includes or link dependencies were introduced in maïs.
+- [ ] No consumer/engine/UI includes or link dependencies were introduced in maïs: `./scripts/check-boundaries.sh` passes, which is the automated gate for this line.
 - [ ] CMake usage remains target-scoped and installed/exported targets work for an external consumer.
 - [ ] Formatting and relevant tests pass; documentation reflects public behavior changes.
 
