@@ -41,12 +41,23 @@ as part of this scripting library. 1.0.0 is the first release of this runtime.
   converter, so pybind11 stays out of the public headers. An unconvertible
   object reports `InvalidArgument` or `TypeMismatch` instead of crashing, and
   the object's lifetime rule is documented on the header.
+- `mais::ErrorCode::WrongThread`: a Python-touching call made from a thread that
+  did not call `initialize()` is refused with this code instead of blocking
+  forever on the GIL. The runtime is unchanged by the refusal.
+- `docs/THREADING.md`, the decision record for interpreter thread affinity:
+  which thread owns the GIL, what the host must guarantee, what a violation
+  returns, the rejected "release the GIL between calls" option, and the
+  dispatch-queue design MAIS-4.1 starts from.
 - A compile-only target proving every public header builds without pybind11 or
   `Python.h`.
 - A standalone fake-host acceptance test: the host injects a C++ service,
   invokes a script that mutates it, and asserts on the reported traceback.
 - Lifecycle tests covering API misuse, single-owner-per-process enforcement,
   three sequential restarts, and destruction without an explicit `shutdown()`.
+- Thread-affinity tests: a second thread is refused with `WrongThread` for
+  `call()`, `callOptional()`, `call<T>()`, `hasFunction()`, `listFunctions()`,
+  `loadModule()`, `addSearchPath()` and `shutdown()`, the owning thread keeps
+  working afterwards, and ownership follows each `initialize()`.
 - `examples/standalone_host`, a complete host with no engine, no UI, and no
   dependency on `guillaume` or `evan`. CTest runs it as an integration test.
 - A benchmark harness (`BUILD_BENCHMARKS`) measuring per-call overhead,
@@ -76,6 +87,10 @@ as part of this scripting library. 1.0.0 is the first release of this runtime.
   stopped rather than handing the host a half-configured runtime.
 - Documentation rewritten around the scripting lifecycle: host-owned objects,
   binding ordering, GIL and thread affinity, and shutdown ordering.
+- The threading contract is now stated once and linked from everywhere: the
+  thread that calls `initialize()` owns the interpreter, and `ScriptRuntime`,
+  `ARCHITECTURE.md`, `TECHNICAL_CHOICES.md`, `GETTING_STARTED.md`,
+  `ERROR_HANDLING.md`, and `README.md` all point at `docs/THREADING.md`.
 
 ### Removed
 

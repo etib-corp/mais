@@ -44,6 +44,11 @@ namespace mais
 		/// initialize() was called on a runtime that is already running.
 		AlreadyInitialized,
 
+		/// A thread other than the one that called initialize() tried to use
+		/// the interpreter. The runtime is unaffected; see
+		/// ScriptRuntime's threading contract.
+		WrongThread,
+
 		/// Python could not be started or stopped; scripting cannot continue.
 		InterpreterFailure,
 

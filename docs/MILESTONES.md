@@ -95,7 +95,7 @@ interpretation, UI widgets, and anything owned by `guillaume`.
 - [ ] A failing `on_update` does not stop the host loop, and its cost is
       attributable to that hook.
 - [ ] A consumer can address an individual traceback frame.
-- [ ] The GIL/threading model is written down and matches the implementation.
+- [x] The GIL/threading model is written down and matches the implementation.
 - [ ] CI builds and tests on the supported Python versions and all three
       desktop OSes.
 - [ ] The dependency boundary is enforced by a check, not only by review.
@@ -164,7 +164,11 @@ constrained hardware, degrades instead of crashing.
 **Exit criteria.**
 
 - [ ] Scripts can be dispatched from a thread other than the initiator, if M1
-      concluded that is needed.
+      concluded that is needed. MAIS-1.6 concluded it is **not** needed yet:
+      [THREADING.md](THREADING.md) keeps the interpreter on the thread that
+      called `initialize()` and refuses cross-thread calls with `WrongThread`.
+      MAIS-4.1 therefore starts from that decision and is triggered by an
+      answered Q5, not by re-litigating the model.
 - [ ] Memory behaviour across long sessions and reloads is measured, not
       assumed.
 - [ ] A repeatedly failing hook has a defined policy and cannot take the
@@ -180,6 +184,11 @@ constrained hardware, degrades instead of crashing.
 | MAIS-4.3 | Define the policy for repeatedly failing hooks | MAIS-4.3 |
 | MAIS-4.4 | Decide the script trust model | MAIS-4.4 |
 | MAIS-4.5 | Record diagnostics without a UI | MAIS-4.6 |
+
+MAIS-4.1 starts from the decision in [THREADING.md](THREADING.md) rather than
+reopening it: the interpreter stays on the thread that called `initialize()`,
+and the work is a queue drained by that thread, with inline re-entrancy, ordered
+delivery and a shutdown drain rule.
 
 ## M5 - Breadth
 

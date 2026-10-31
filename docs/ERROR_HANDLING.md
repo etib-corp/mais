@@ -13,6 +13,7 @@ problem.
 | `Ok`                 | Success                                                     | Continue                       |
 | `NotInitialized`     | Used before `initialize()` or after `shutdown()`            | Fix the call order             |
 | `AlreadyInitialized` | `initialize()` or `registerModule()` after startup          | Register bindings first        |
+| `WrongThread`        | Called from a thread that does not own the interpreter       | Call it from the `initialize()` thread; see [THREADING.md](THREADING.md) |
 | `InterpreterFailure` | Python could not start/stop, or another interpreter exists   | Fatal: stop scripting          |
 | `InvalidArgument`    | Empty name, empty binding callback, empty search path        | Fix the call                   |
 | `ScriptNotFound`     | A search path is not an existing directory                   | Fix the path                   |
@@ -53,6 +54,8 @@ while (host.isRunning()) {
 
 Only `InterpreterFailure` is fatal. Every other code means the interpreter is
 still usable, so the host decides whether to retry, ignore, or stop.
+`WrongThread` in particular leaves the runtime untouched and running: the same
+call simply has to be made on the owning thread.
 
 ## Python exceptions
 

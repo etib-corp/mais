@@ -114,6 +114,19 @@ hook that needs a native object reads it from the host module instead of
 receiving it as a parameter. The same four types can be read back from a call;
 see [section 6](#6-read-a-value-back).
 
+### Keep every script call on one thread
+
+The thread that called `initialize()` owns the interpreter, and maïs keeps the
+GIL there. Every hook, `loadModule()`, `addSearchPath()` while running, and
+`shutdown()` must be called from that thread; a call from any other thread
+returns `mais::ErrorCode::WrongThread` and changes nothing. The runtime is not
+internally synchronized either, so do not read its state from a second thread.
+The decision and its alternatives are in [THREADING.md](THREADING.md).
+
+If scripting ever needs to move off that thread, do not try to grab the GIL from
+the render thread: that mode is unsupported by design and is what MAIS-4.1 would
+have to change.
+
 ## 5. Report failures with the traceback
 
 Every fallible call returns a `mais::Error`, and a script error never unwinds
@@ -175,8 +188,14 @@ the runtime down before those objects are destroyed:
 runtime.shutdown();
 ```
 
+`shutdown()` and the runtime's destructor both finalize Python, so both belong to
+the thread that called `initialize()`. A runtime destroyed on another thread
+cannot report the mistake, and one whose owner thread exits first cannot be
+stopped at all.
+
 ## Next steps
 
+- [THREADING.md](THREADING.md) for the thread and GIL contract.
 - [ERROR_HANDLING.md](ERROR_HANDLING.md) for the error taxonomy and tracebacks.
 - [ARCHITECTURE.md](ARCHITECTURE.md) for the ownership and dependency rules.
 - `examples/standalone_host/` for the complete runnable host.

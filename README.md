@@ -140,9 +140,11 @@ not look the same as a gate that passes.
 | `MAIS_CHECK_BOUNDARIES` | `ON` | Fail configuration when the target links anything but pybind11 and Python. |
 
 Python discovery is delegated to pybind11 so that the interpreter and the
-linked library cannot come from different installations. `ScriptRuntime` holds
-the GIL for the thread that called `initialize()`, so every script call happens
-on that thread.
+linked library cannot come from different installations. `ScriptRuntime` is
+thread-affine: the thread that calls `initialize()` owns the interpreter and
+holds the GIL, every script call happens there, and a call from another thread is
+refused with `WrongThread` instead of blocking. See
+[docs/THREADING.md](docs/THREADING.md).
 
 ## Consuming as a dependency
 

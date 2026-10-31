@@ -34,7 +34,7 @@ Verified by a clean configure, build, and test run:
 | Python error reporting with tracebacks | `Error` carries the message and a `traceback.format_exception()` render |
 | Standalone host with no engine or UI | `examples/standalone_host`, also registered as a CTest |
 | Consumability | Installed package, `find_package(mais)`, `mais::mais`; verified from a separate project |
-| Guardrails | 32 tests, benchmark harness, Doxygen target, formatter check, ASan/coverage CI |
+| Guardrails | 40 tests (including cross-thread refusal), benchmark harness, Doxygen target, formatter check, ASan/coverage CI |
 
 ## Ownership boundary
 
@@ -86,7 +86,7 @@ straight to a hook and read values back.
 | MAIS-1.4 | **Per-hook call policy.** Continue/stop, warn-once, and per-hook timing. | One broken `on_update` must not kill a running session; the UI shows which hook is slow. | Next |
 | MAIS-1.5 | **Structured diagnostics.** Traceback frames as data — file, line, function — not only formatted text. | A console can only jump to source if it gets frames, not a string. | Next |
 | MAIS-1.6 | **Explicit module lifecycle.** `reloadModule()`, `unloadModule()`, and documented re-import semantics. | Precursor to M3; also lets a host disable a bad script at runtime. | Later |
-| MAIS-1.7 | **Decide and document the GIL/threading model.** Either the current "hold the GIL on the initializing thread" or a release/attach mode. | `evan` may want scripts callable from a render or worker thread. Decide before M2 hardens. | Next |
+| MAIS-1.7 | **Decide and document the GIL/threading model.** Either the current "hold the GIL on the initializing thread" or a release/attach mode. | `evan` may want scripts callable from a render or worker thread. Decide before M2 hardens. | Done: [THREADING.md](THREADING.md) keeps the current model and refuses cross-thread calls with `WrongThread`. |
 | MAIS-1.8 | **Support matrix.** CI across Python 3.11–3.13 and all three desktop OSes; state the floor and ceiling. | First-class Windows support is currently unverified on real hardware. | Next |
 | MAIS-1.9 | **API freeze review** and complete API-reference coverage before `1.0.0` is tagged. | Consumers should not build on a moving surface. | Later |
 
@@ -135,7 +135,7 @@ beyond the documented budget.
 
 | ID | Item | Notes | Status |
 | --- | --- | --- | --- |
-| MAIS-4.1 | Cross-thread callback dispatch, if MAIS-1.7 shows it is needed. | Requires an explicit queue and lifetime model, not ad-hoc GIL grabs. | Later |
+| MAIS-4.1 | Cross-thread callback dispatch, if MAIS-1.7 shows it is needed. | Starts from the decision in [THREADING.md](THREADING.md): queue onto the interpreter thread, inline re-entrancy, shutdown drain — not ad-hoc GIL grabs. | Conditional |
 | MAIS-4.2 | Memory verification: reference cycles, bounded caches, leak checks under ASan/Valgrind across many reloads. | See the `ASAN_OPTIONS` note in `sanitizers.yml`. | Later |
 | MAIS-4.3 | Failure policy: error budgets, disable-a-failing-module, no uninformative Booleans. | A bad script should degrade, not crash the session. | Later |
 | MAIS-4.4 | Trust model and sandboxing, if scripts can be user-authored. | Threat model first; sandboxing is a design, not a flag. | Conditional |
@@ -166,7 +166,7 @@ consumer's behalf.
 | Q2 | Which UI toolkit hosts the console and settings panel? | HOST-2.4, HOST-2.5 | guillaume |
 | Q3 | Hot reload scope: module re-import, subinterpreter per script, or process swap? | M3 | maintainers |
 | Q4 | Are scripts first-party only, or user-authored? | MAIS-4.4 | product |
-| Q5 | Must scripts ever run off the main thread? | MAIS-1.7, MAIS-4.1 | evan + guillaume |
+| Q5 | Must scripts ever run off the main thread? | MAIS-4.1 (MAIS-1.7 keeps the single-thread model until this is answered) | evan + guillaume |
 | Q6 | Python floor and ceiling; is Windows first-class? | MAIS-1.8 | maintainers |
 | Q7 | Is there a sponsor for a second scripting language? | MAIS-5.1 | maintainers |
 | Q8 | One runtime per process forever, or eventually several? | MAIS-4.5 | maintainers |
