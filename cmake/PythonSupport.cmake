@@ -9,12 +9,48 @@
 # matrix on Linux, macOS, and Windows in the pull request that adds it.
 set(MAIS_PYTHON_VERSIONS 3.9 3.10 3.11 3.12 3.13 3.14)
 
-list(GET MAIS_PYTHON_VERSIONS 0 MAIS_PYTHON_MIN)
-list(LENGTH MAIS_PYTHON_VERSIONS _mais_python_count)
-math(EXPR _mais_python_last "${_mais_python_count} - 1")
-list(GET MAIS_PYTHON_VERSIONS ${_mais_python_last} MAIS_PYTHON_MAX)
-unset(_mais_python_count)
-unset(_mais_python_last)
+# Computes the floor and ceiling of a version list.
+#
+# The extremes are found by comparison, not taken from the first and last
+# entries, so the order of MAIS_PYTHON_VERSIONS cannot change what configure
+# accepts: appending 3.8 would otherwise make 3.8 the ceiling and reject every
+# supported version.
+function(mais_python_supported_range versions out_min out_max)
+    set(_mais_python_min "")
+    set(_mais_python_max "")
+
+    foreach(_mais_python_version IN LISTS versions)
+        if(_mais_python_min STREQUAL "")
+            set(_mais_python_min "${_mais_python_version}")
+        elseif(_mais_python_version VERSION_LESS _mais_python_min)
+            set(_mais_python_min "${_mais_python_version}")
+        endif()
+
+        if(_mais_python_max STREQUAL "")
+            set(_mais_python_max "${_mais_python_version}")
+        elseif(_mais_python_version VERSION_GREATER _mais_python_max)
+            set(_mais_python_max "${_mais_python_version}")
+        endif()
+    endforeach()
+
+    # An empty list would leave a range of two empty strings, which compares as
+    # 0 and accepts every interpreter, so it is a configuration error rather
+    # than an unsupported range.
+    if(_mais_python_min STREQUAL "")
+        message(FATAL_ERROR
+            "mais declares no supported Python versions in "
+            "cmake/PythonSupport.cmake. Add at least one, or the "
+            "supported-range guard would accept every interpreter."
+        )
+    endif()
+
+    set(${out_min} "${_mais_python_min}" PARENT_SCOPE)
+    set(${out_max} "${_mais_python_max}" PARENT_SCOPE)
+endfunction()
+
+mais_python_supported_range(
+    "${MAIS_PYTHON_VERSIONS}" MAIS_PYTHON_MIN MAIS_PYTHON_MAX
+)
 
 # Script mode (`cmake -P cmake/PythonSupport.cmake`): write the list out as a
 # JSON array so CI can turn it into a build matrix without repeating it.
@@ -30,8 +66,17 @@ endif()
 # pybind11 or as a runtime failure, naming neither the range nor the
 # interpreter that was actually selected.
 function(mais_require_supported_python)
+    # pybind11 populates Python_VERSION during discovery, and configure calls
+    # this immediately afterwards. An absent version therefore means discovery
+    # changed shape; failing loudly keeps the range enforced, whereas returning
+    # would silently accept every interpreter with no test noticing.
     if(NOT Python_VERSION)
-        return()
+        message(FATAL_ERROR
+            "mais cannot check the supported Python range: the resolved "
+            "interpreter reported no version, so Python_VERSION is empty. "
+            "Python discovery ran without populating it; fix the discovery "
+            "wiring in CMakeLists.txt rather than skipping the check."
+        )
     endif()
 
     string(REGEX MATCH "^[0-9]+\\.[0-9]+" _mais_python_found "${Python_VERSION}")

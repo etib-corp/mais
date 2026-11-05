@@ -2,8 +2,10 @@
 #
 # The guard is what turns an unsupported interpreter into an actionable
 # configure error, so it is checked directly: a version below the floor and a
-# version above the ceiling must both abort with a message naming the range,
-# and a version inside it must pass.
+# version above the ceiling must both abort with a message naming the range, a
+# version inside it must pass, and a missing Python_VERSION must abort instead
+# of leaving the guard disabled. The range itself must also be independent of
+# the order of MAIS_PYTHON_VERSIONS.
 
 include("${MAIS_SOURCE_DIR}/cmake/PythonSupport.cmake")
 
@@ -40,6 +42,31 @@ set(_above_version "${_max_major}.${_above_minor}.0")
 
 set(_expected_range "supports Python ${MAIS_PYTHON_MIN} through ${MAIS_PYTHON_MAX}")
 
+# The floor and ceiling are the extremes of the list, not its first and last
+# entries, so the order of MAIS_PYTHON_VERSIONS cannot move the range. Sorted
+# input passes either way, hence the reversed case.
+mais_python_supported_range("${MAIS_PYTHON_VERSIONS}" _declared_min _declared_max)
+if(NOT _declared_min STREQUAL MAIS_PYTHON_MIN
+   OR NOT _declared_max STREQUAL MAIS_PYTHON_MAX)
+    message(FATAL_ERROR
+        "The declared range (${MAIS_PYTHON_MIN}-${MAIS_PYTHON_MAX}) is not the "
+        "extremes of MAIS_PYTHON_VERSIONS, which are "
+        "${_declared_min}-${_declared_max}."
+    )
+endif()
+
+set(_reversed_list ${MAIS_PYTHON_VERSIONS})
+list(REVERSE _reversed_list)
+mais_python_supported_range("${_reversed_list}" _reversed_min _reversed_max)
+if(NOT _reversed_min STREQUAL MAIS_PYTHON_MIN
+   OR NOT _reversed_max STREQUAL MAIS_PYTHON_MAX)
+    message(FATAL_ERROR
+        "Reversing MAIS_PYTHON_VERSIONS changed the supported range to "
+        "${_reversed_min}-${_reversed_max}; it must stay "
+        "${MAIS_PYTHON_MIN}-${MAIS_PYTHON_MAX}."
+    )
+endif()
+
 foreach(_rejected IN ITEMS "${_below_version}" "${_above_version}")
     _run_guard_probe("${_rejected}" _result _output)
     if("${_result}" EQUAL 0)
@@ -75,6 +102,30 @@ if(NOT "${_result}" EQUAL 0)
     message(FATAL_ERROR
         "Python ${MAIS_PYTHON_MAX}.0 is on the supported ceiling but was "
         "rejected. Output was:\n${_output}"
+    )
+endif()
+
+# A missing Python_VERSION means discovery changed shape. The guard must fail
+# loudly there: a silent return would leave every interpreter accepted, and the
+# synthetic versions above would keep passing, so it is exercised separately.
+execute_process(
+    COMMAND "${CMAKE_COMMAND}"
+        "-DMAIS_SOURCE_DIR=${MAIS_SOURCE_DIR}"
+        -P "${_probe}"
+    RESULT_VARIABLE _result
+    OUTPUT_VARIABLE _output
+    ERROR_VARIABLE _output
+)
+if("${_result}" EQUAL 0)
+    message(FATAL_ERROR
+        "mais_require_supported_python() passed with no Python_VERSION, so "
+        "the guard silently disabled itself instead of reporting the broken "
+        "discovery."
+    )
+endif()
+if(NOT _output MATCHES "Python_VERSION")
+    message(FATAL_ERROR
+        "The guard did not name the missing version. Output was:\n${_output}"
     )
 endif()
 
