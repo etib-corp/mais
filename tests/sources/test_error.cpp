@@ -110,10 +110,12 @@ TEST(ErrorCodeTest, OnlyInterpreterFailureIsFatal)
 {
 	EXPECT_TRUE(mais::isFatal(mais::ErrorCode::InterpreterFailure));
 	EXPECT_FALSE(mais::isFatal(mais::ErrorCode::NotInitialized));
+	EXPECT_FALSE(mais::isFatal(mais::ErrorCode::WrongThread));
 	EXPECT_FALSE(mais::isFatal(mais::ErrorCode::Ok));
 
 	EXPECT_TRUE(mais::isRecoverable(mais::ErrorCode::FunctionNotFound));
 	EXPECT_TRUE(mais::isRecoverable(mais::ErrorCode::InvocationFailed));
+	EXPECT_TRUE(mais::isRecoverable(mais::ErrorCode::WrongThread));
 	EXPECT_FALSE(mais::isRecoverable(mais::ErrorCode::Ok));
 	EXPECT_FALSE(mais::isRecoverable(mais::ErrorCode::InterpreterFailure));
 

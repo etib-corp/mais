@@ -1,6 +1,7 @@
 # Threading and the GIL
 
-**Status:** accepted (M1, MAIS-1.6), before 1.0.0. **Applies to:** `mais::ScriptRuntime`.
+**Status:** accepted (M1, MAIS-1.6; issue #6 / roadmap MAIS-1.7), before 1.0.0.
+**Applies to:** `mais::ScriptRuntime`.
 
 This is the decision record behind the threading contract in
 [`ScriptRuntime.hpp`](../headers/mais/ScriptRuntime.hpp). It exists because
@@ -57,9 +58,12 @@ Concretely:
    Python can reach them. maïs cannot enforce this; it follows from the host
    owning its objects (`ARCHITECTURE.md`, "Ownership boundaries").
 4. **No background Python threads.** A `threading.Thread` started by a script
-   can only make progress while the owning thread is executing Python bytecode,
-   because that is the only time the GIL is handed over. Scripts must not rely
-   on it. maïs does not pump Python between hooks.
+   makes progress only while the owning thread is executing Python bytecode or
+   is blocked in a call that releases the GIL (`time.sleep`, file or socket
+   I/O — see the `sleep_ms` binding added in #29). Between hooks, or while the
+   owner runs C++ code, the thread is parked. Scripts must not rely on it:
+   maïs does not pump Python between hooks, so progress depends on what the
+   owner happens to be doing and is never guaranteed.
 
 ## What happens on violation
 

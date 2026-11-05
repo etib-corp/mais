@@ -34,7 +34,7 @@ Verified by a clean configure, build, and test run:
 | Python error reporting with tracebacks | `Error` carries the message and a `traceback.format_exception()` render |
 | Standalone host with no engine or UI | `examples/standalone_host`, also registered as a CTest |
 | Consumability | Installed package, `find_package(mais)`, `mais::mais`; verified from a separate project |
-| Guardrails | 40 tests (including cross-thread refusal), benchmark harness, Doxygen target, formatter check, ASan/coverage CI |
+| Guardrails | Unit and integration tests (including cross-thread refusal), benchmark harness, Doxygen target, formatter check, ASan/coverage CI |
 
 ## Ownership boundary
 
