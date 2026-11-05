@@ -99,6 +99,7 @@ TEST(ErrorTest, NamesEveryCode)
 	EXPECT_EQ(mais::errorCodeName(mais::ErrorCode::Ok), "Ok");
 	EXPECT_EQ(mais::errorCodeName(mais::ErrorCode::AlreadyInitialized),
 			  "AlreadyInitialized");
+	EXPECT_EQ(mais::errorCodeName(mais::ErrorCode::WrongThread), "WrongThread");
 	EXPECT_EQ(mais::errorCodeName(mais::ErrorCode::ScriptNotFound),
 			  "ScriptNotFound");
 	EXPECT_EQ(mais::errorCodeName(mais::ErrorCode::InvocationFailed),
@@ -109,10 +110,12 @@ TEST(ErrorCodeTest, OnlyInterpreterFailureIsFatal)
 {
 	EXPECT_TRUE(mais::isFatal(mais::ErrorCode::InterpreterFailure));
 	EXPECT_FALSE(mais::isFatal(mais::ErrorCode::NotInitialized));
+	EXPECT_FALSE(mais::isFatal(mais::ErrorCode::WrongThread));
 	EXPECT_FALSE(mais::isFatal(mais::ErrorCode::Ok));
 
 	EXPECT_TRUE(mais::isRecoverable(mais::ErrorCode::FunctionNotFound));
 	EXPECT_TRUE(mais::isRecoverable(mais::ErrorCode::InvocationFailed));
+	EXPECT_TRUE(mais::isRecoverable(mais::ErrorCode::WrongThread));
 	EXPECT_FALSE(mais::isRecoverable(mais::ErrorCode::Ok));
 	EXPECT_FALSE(mais::isRecoverable(mais::ErrorCode::InterpreterFailure));
 

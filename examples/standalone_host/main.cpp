@@ -155,18 +155,27 @@ int main(int argc, char **argv)
 		reportError(error);
 	}
 
-	// The host owns the loop; scripts run only where the host decides.
+	// The host owns the loop; scripts run only where the host decides. The
+	// policy belongs to the host too: a failing hook is reported once instead
+	// of every frame, and the report carries the time the call took, which is
+	// what a console would show next to the hook name.
 	constexpr int frameCount	  = 3;
 	constexpr double deltaSeconds = 1.0 / 60.0;
 	for (int frame = 0; frame < frameCount; ++frame) {
 		metrics.elapsedSeconds += deltaSeconds;
-		if (mais::Error error = runtime.callOptional(
-				"game", "on_update",
-				{ mais::ScriptArgument::native(&metrics, metricsConverter()),
-				  mais::ScriptArgument::number(deltaSeconds) });
-			error) {
-			reportError(error);
+		mais::CallReport report = runtime.callOptional(
+			mais::FailurePolicy::ReportOnce, "game", "on_update",
+			{ mais::ScriptArgument::native(&metrics, metricsConverter()),
+			  mais::ScriptArgument::number(deltaSeconds) });
+
+		if (report.stopRequested) {
+			break;
 		}
+		if (report) {
+			reportError(report.error);
+		}
+		std::cout << "host: on_update took " << report.duration.count()
+				  << " ns\n";
 	}
 
 	if (mais::Error error = runtime.callOptional(

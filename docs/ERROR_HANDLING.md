@@ -20,6 +20,7 @@ problem.
 | `FunctionNotFound`   | The module has no such function                              | Use `callOptional()` for hooks, or `hasFunction()` to check without invoking |
 | `TypeMismatch`       | A value could not be converted (including a native argument), the attribute is not callable, or a returned value has the wrong type | Fix the argument or the script |
 | `InvocationFailed`   | The script raised a Python exception                          | Log `traceback()`/`frames()` and continue |
+| `WrongThread`        | Called from a thread that does not own the interpreter       | Call it from the `initialize()` thread; see [THREADING.md](THREADING.md) |
 
 Helpers: `isOk`, `isRecoverable`, `isFatal`, and `errorCodeName`.
 
@@ -33,6 +34,11 @@ Every fallible method returns `mais::Error`:
 - `ScriptRuntime::hasFunction()` / `listFunctions()`
 - `ScriptRuntime::call()` / `callOptional()`, and their typed
   `call<T>()` / `callOptional<T>()` overloads
+
+The overloads that take a `mais::FailurePolicy` first return a
+`mais::CallReport` instead: the same error plus the measured duration and the
+per-hook failure accounting. They are described in
+[Call policy and timing](#call-policy-and-timing).
 
 A default-constructed `Error` is `Ok`, and `explicit operator bool()` reports
 failure, so the check reads the same way as `std::error_code`:
@@ -53,6 +59,8 @@ while (host.isRunning()) {
 
 Only `InterpreterFailure` is fatal. Every other code means the interpreter is
 still usable, so the host decides whether to retry, ignore, or stop.
+`WrongThread` in particular leaves the runtime untouched and running: the same
+call simply has to be made on the owning thread.
 
 ## Python exceptions
 
@@ -160,6 +168,122 @@ whose message names the function, the returned type, and the requested one:
 ```text
 'game.configure' returned float, but bool was requested
 ```
+
+## Call policy and timing
+
+The `Error`-returning `call()` and `callOptional()` overloads report every
+failure. A host that runs a session for hours usually wants one policy instead
+of an `if` around each call, and a number it can attribute to the hook. The
+policy-bearing overloads take a `mais::FailurePolicy` first and return a
+`mais::CallReport`:
+
+| `FailurePolicy` | On success | On failure |
+| --- | --- | --- |
+| `Continue` | `isOk()` | the error, every time |
+| `Stop` | `isOk()` | the error, with `stopRequested` set |
+| `ReportOnce` | `isOk()` | the error once per streak, then `isOk()` with `suppressed` and no error |
+
+```cpp
+mais::CallReport report = runtime.callOptional(
+    mais::FailurePolicy::ReportOnce, "game", "on_update",
+    {mais::ScriptArgument::number(deltaSeconds)});
+
+if (report.stopRequested) {
+    break;                       // only under FailurePolicy::Stop
+}
+if (report) {
+    console.log(report.error);   // once per failure streak
+}
+console.timing("on_update", report.duration);
+```
+
+A suppressed repeat carries an `Ok` error, so `if (report)` logs the first
+failure and nothing after it. The report keeps the accounting for a console
+that wants to show how many were folded away: `consecutiveFailures` and
+`suppressed`. The overloads with a policy are the only ones that measure and
+suppress; the `Error`-returning overloads keep their previous behaviour, which
+is not quite free of the new bookkeeping: their success path adds one emptiness
+check, and a failure pays for one map key and one signature string, so that the
+counters stay truthful whichever overload a host mixes in. A host that pairs a
+policy with the names from `listFunctions()` has a per-hook policy without a
+table of its own.
+
+`FailurePolicy::Stop` never stops the interpreter and never throws: it only sets
+`stopRequested`, so the host leaves its loop when it is ready and calls
+`shutdown()` in its own order. A repeatedly failing hook therefore cannot end
+the loop unless the host opts into `Stop` and honours that flag.
+
+### What "repeated" means
+
+A failure repeats when the same hook (module and function) fails consecutively
+with the same `ErrorCode`, Python exception type, and message. The traceback is
+not part of that identity: a statement can move between lines while the failure
+stays the same failure, so the message distinguishes causes and the code
+distinguishes categories.
+
+- A **changed** message, exception type, or code is a new failure and is
+  reported again, even though the hook is the same.
+- A **successful** call of that hook ends its streak, so a hook that recovers
+  and breaks again is reported again.
+- Each hook has its own counters: a failure of `on_start` never suppresses one
+  of `on_update`.
+
+### Adopting a policy mid-session
+
+Every overload updates the counters, so a failure that an `Error`-returning
+call already reported is a repeat by the time a policy sees it:
+
+```cpp
+runtime.call("game", "on_update");  // fails: reported, and counted
+runtime.call(mais::FailurePolicy::ReportOnce, "game", "on_update");
+// same failure -> Ok with suppressed set, nothing logged
+```
+
+That follows from the rule above and is deliberate: the counters describe the
+hook, not the overload. A host that switches to a policy while a hook is already
+failing should adopt it before the first call of the run, or treat `suppressed`
+on its first policy call as "already reported" rather than as "nothing
+happened" — `consecutiveFailures` still carries the true streak length.
+
+### Where the counters live
+
+Failure counters belong to one run of one `ScriptRuntime`:
+
+- `initialize()` and `shutdown()` clear them, so a restart never inherits a
+  suppression from the previous run.
+- A second runtime never sees them; nothing is process-wide or stored on disk.
+- Every call updates them, whichever overload made it, but only the
+  policy-bearing overloads decide what to report. A call rejected before the
+  hook runs (empty name, runtime not initialized) is reported but not counted,
+  so `consecutiveFailures` stays zero for it.
+- They are not thread-safe, like every other part of the runtime: use the
+  thread that called `initialize()`. A call from another thread is refused with
+  `WrongThread` and counted as no failure, so it cannot consume a hook's one
+  report.
+
+### Reading the duration
+
+`CallReport::duration` is a `std::chrono::nanoseconds` measured with
+`std::chrono::steady_clock`. The clock spans validation, argument conversion,
+the Python call, and the capture of its failure, so the number is what the host
+pays for that hook rather than a benchmark estimate. A console can chart it per
+hook and a bench cannot disagree with it: `benchmarks/benchmark_main.cpp`
+reports the same value as the `runtime_ns_per_call` counter.
+
+### Why there is no `call<T>(FailurePolicy, ...)`
+
+The policy overlays the untyped calls only. A hook that returns a value is a
+query, not the per-frame failure path the policy exists for: `Stop` has nothing
+to mean, and `ReportOnce` would have to decide what a suppressed value is. A
+caller that wants both a value and a duration can time the typed call itself
+with `std::chrono::steady_clock`. Timing a value-returning call from inside the
+runtime is a follow-up, taken only if a consumer needs it.
+
+The resulting surface — four policy-bearing variants next to the existing eight
+— is recorded as final in
+[TECHNICAL_CHOICES.md](TECHNICAL_CHOICES.md#call-policy-and-timing-surface);
+further growth goes through a `CallOptions` consolidation reviewed at the
+API-freeze milestone rather than through more overloads.
 
 ## Inspecting a module without running it
 

@@ -23,7 +23,9 @@ with consistent quality and collaboration practices.
 3. Implement your changes.
 4. Add or update tests.
 5. Run the test suite.
-6. Open a pull request.
+6. Run `./scripts/check-boundaries.sh` to confirm maïs still depends only on
+   pybind11 and Python, with no engine, renderer, or UI dependency.
+7. Open a pull request.
 
 Ensure your code matches conventions and passes tests before requesting review.
 

@@ -47,4 +47,18 @@ namespace mais_test
 		(void)argument.value();
 		(void)argument.typeName();
 	}
+
+	/// Instantiates the call policy types without pybind11 or Python.h.
+	inline void touchCallReport(const mais::CallReport &report) noexcept
+	{
+		(void)report.isOk();
+		(void)report.error.code();
+		(void)report.duration.count();
+		(void)report.consecutiveFailures;
+		(void)report.suppressed;
+		(void)report.stopRequested;
+		(void)mais::FailurePolicy::Continue;
+		(void)mais::FailurePolicy::Stop;
+		(void)mais::FailurePolicy::ReportOnce;
+	}
 }	 // namespace mais_test

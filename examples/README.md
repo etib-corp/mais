@@ -14,9 +14,13 @@ It walks through the host's responsibilities in order:
 
 1. Queue the `host` binding, then start the interpreter.
 2. Add the script directory and import `game`.
-3. Call the optional hooks: `configure`, `on_start`, `on_update`, `on_shutdown`.
-4. Validate the settings the script proposed before using them.
-5. Stop the runtime before the native services are destroyed.
+3. Call `configure` and validate the settings the script proposed before using
+   them, then call `on_start`.
+4. Call `on_update` every frame with a `ReportOnce` policy, and print the
+   duration the runtime measured for it: a failing hook is reported once
+   instead of every frame, and its cost is attributable to that hook.
+5. Call `on_shutdown`, then stop the runtime before the native services are
+   destroyed.
 
 ### Building
 
