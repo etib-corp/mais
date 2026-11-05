@@ -129,6 +129,23 @@ cmake --build build
 ./build/examples/standalone_host/standalone_host examples/standalone_host/scripts
 ```
 
+### Keeping the library generic
+
+maïs must stay usable without an engine, a renderer, or a UI. One command
+enforces that boundary, locally and in CI:
+
+```sh
+./scripts/check-boundaries.sh
+```
+
+It fails when `headers/` or `sources/` include anything beyond the C++ standard
+library, CPython, pybind11, and maïs's own headers, or when a standalone
+configure — no consumer present — finds the `mais` target linking anything but
+`pybind11::embed` and the Python runtime it carries. `--verify` additionally
+injects a forbidden include and a consumer that pushes a dependency into the
+target, and fails unless each is rejected: a gate that accepts everything must
+not look the same as a gate that passes.
+
 | Option | Default | Purpose |
 | --- | --- | --- |
 | `BUILD_TESTING` | `ON` | Build and register the GoogleTest suite. |
@@ -137,11 +154,14 @@ cmake --build build
 | `BUILD_DOCS` | `OFF` | Build the Doxygen API reference. |
 | `DEV_MODE` | `OFF` | Compile with `-Wall -Wextra -Wpedantic -Werror`. |
 | `MAIS_FETCH_PYBIND11` | `ON` | Fetch pybind11 when it is not installed. |
+| `MAIS_CHECK_BOUNDARIES` | `ON` | Fail configuration when the target links anything but pybind11 and Python. |
 
 Python discovery is delegated to pybind11 so that the interpreter and the
-linked library cannot come from different installations. `ScriptRuntime` holds
-the GIL for the thread that called `initialize()`, so every script call happens
-on that thread.
+linked library cannot come from different installations. `ScriptRuntime` is
+thread-affine: the thread that calls `initialize()` owns the interpreter and
+holds the GIL, every script call happens there, and a call from another thread is
+refused with `WrongThread` instead of blocking. See
+[docs/THREADING.md](docs/THREADING.md).
 
 ## Consuming as a dependency
 

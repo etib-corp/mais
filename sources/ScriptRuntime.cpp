@@ -37,6 +37,7 @@
 #include <filesystem>
 #include <iterator>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -153,6 +154,18 @@ namespace mais
 				return ErrorCode::TypeMismatch;
 			}
 			return ErrorCode::InvocationFailed;
+		}
+
+		/// The refusal for a Python-touching call from a thread that does not
+		/// own the interpreter. Without it the caller would wait for a GIL the
+		/// owning thread never releases.
+		Error threadAffinityError(std::string_view operation)
+		{
+			return Error(ErrorCode::WrongThread,
+						 std::string(operation)
+							 + " must run on the thread that called "
+							   "initialize(): a ScriptRuntime keeps its "
+							   "interpreter and the GIL on that thread");
 		}
 
 		/// Result of converting one returned Python value to a C++ scalar.
@@ -347,6 +360,9 @@ namespace mais
 		/// False until initialize() succeeds, and again after shutdown().
 		bool running = false;
 
+		/// Thread that called initialize(); no thread while stopped.
+		std::thread::id ownerThread;
+
 		/// Owns the interpreter; resetting it finalizes Python.
 		std::unique_ptr<py::scoped_interpreter> interpreter;
 
@@ -414,6 +430,12 @@ namespace mais
 			if (!failureRecords.empty()) {
 				failureRecords.erase(hookKey(moduleName, functionName));
 			}
+		}
+
+		/// True when the calling thread started the running interpreter.
+		[[nodiscard]] bool ownsInterpreter() const noexcept
+		{
+			return std::this_thread::get_id() == ownerThread;
 		}
 
 		/// Builds an Error carrying the Python message, traceback, exception
@@ -617,7 +639,8 @@ namespace mais
 				// Finalization is best-effort; the runtime state is reset
 				// below.
 			}
-			running = false;
+			running		= false;
+			ownerThread = std::thread::id();
 		}
 
 		/// The Python result of one invocation, or the error that replaced it.
@@ -645,11 +668,16 @@ namespace mais
 		}
 
 		/// Shared module checks for calls and introspection queries.
-		[[nodiscard]] Error validateModule(std::string_view moduleName) const
+		/// `operation` names the refused call in a WrongThread diagnostic.
+		[[nodiscard]] Error validateModule(std::string_view moduleName,
+										   std::string_view operation) const
 		{
 			if (!running) {
 				return Error(ErrorCode::NotInitialized,
 							 "the scripting runtime is not running");
+			}
+			if (!ownsInterpreter()) {
+				return threadAffinityError(operation);
 			}
 			if (moduleName.empty()) {
 				return Error(ErrorCode::InvalidArgument,
@@ -660,9 +688,10 @@ namespace mais
 
 		/// Shared argument checks for every call() overload.
 		[[nodiscard]] Error validateCall(std::string_view moduleName,
-										 std::string_view functionName) const
+										 std::string_view functionName,
+										 std::string_view operation) const
 		{
-			Error invalid = validateModule(moduleName);
+			Error invalid = validateModule(moduleName, operation);
 
 			if (invalid) {
 				return invalid;
@@ -767,7 +796,8 @@ namespace mais
 					   const std::vector<ScriptArgument> &arguments,
 					   bool optional)
 		{
-			if (Error invalid = validateCall(moduleName, functionName);
+			if (Error invalid = validateCall(moduleName, functionName,
+											 "call()/callOptional()");
 				invalid) {
 				return invalid;
 			}
@@ -801,7 +831,8 @@ namespace mais
 							const std::vector<ScriptArgument> &arguments,
 							bool optional)
 		{
-			if (Error invalid = validateCall(moduleName, functionName);
+			if (Error invalid = validateCall(moduleName, functionName,
+											 "call()/callOptional()");
 				invalid) {
 				return Result<T>(std::move(invalid));
 			}
@@ -844,7 +875,8 @@ namespace mais
 			CallReport report;
 			const auto started = std::chrono::steady_clock::now();
 
-			Error invalid = validateCall(moduleName, functionName);
+			Error invalid =
+				validateCall(moduleName, functionName, "call()/callOptional()");
 			// The call was rejected before the hook ran, so there is no hook
 			// failure to count.
 			const bool rejected = !invalid.isOk();
@@ -1013,7 +1045,8 @@ namespace mais
 						 std::string("could not start Python: ")
 							 + error.what());
 		}
-		_impl->running = true;
+		_impl->running	   = true;
+		_impl->ownerThread = std::this_thread::get_id();
 
 		try {
 			// Cache the module now so that reporting a later failure never has
@@ -1053,6 +1086,9 @@ namespace mais
 			return Error(ErrorCode::NotInitialized,
 						 "the scripting runtime is not running");
 		}
+		if (!_impl->ownsInterpreter()) {
+			return threadAffinityError("shutdown()");
+		}
 		_impl->stop();
 		return Error::ok();
 	}
@@ -1066,6 +1102,9 @@ namespace mais
 	{
 		if (path.empty()) {
 			return Error(ErrorCode::InvalidArgument, "search path is empty");
+		}
+		if (_impl->running && !_impl->ownsInterpreter()) {
+			return threadAffinityError("addSearchPath()");
 		}
 
 		std::error_code filesystemError;
@@ -1098,6 +1137,9 @@ namespace mais
 			return Error(ErrorCode::NotInitialized,
 						 "the scripting runtime is not running");
 		}
+		if (!_impl->ownsInterpreter()) {
+			return threadAffinityError("loadModule()");
+		}
 		if (moduleName.empty()) {
 			return Error(ErrorCode::InvalidArgument, "module name is empty");
 		}
@@ -1127,7 +1169,8 @@ namespace mais
 	Result<bool> ScriptRuntime::hasFunction(std::string_view moduleName,
 											std::string_view functionName) const
 	{
-		Error invalid = _impl->validateCall(moduleName, functionName);
+		Error invalid =
+			_impl->validateCall(moduleName, functionName, "hasFunction()");
 
 		if (invalid) {
 			return Result<bool>(std::move(invalid));
@@ -1167,7 +1210,7 @@ namespace mais
 	Result<std::vector<std::string>>
 		ScriptRuntime::listFunctions(std::string_view moduleName) const
 	{
-		Error invalid = _impl->validateModule(moduleName);
+		Error invalid = _impl->validateModule(moduleName, "listFunctions()");
 
 		if (invalid) {
 			return Result<std::vector<std::string>>(std::move(invalid));

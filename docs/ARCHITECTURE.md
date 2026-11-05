@@ -36,7 +36,7 @@ graph TD
 ```
 
 - **ScriptRuntime** is the host-facing entry point for starting/stopping scripting, locating scripts, and invoking hooks. Its exact API is to be defined during implementation.
-- **Interpreter lifecycle** enforces explicit, process-aware Python initialization and finalization. The first implementation should define one owner rather than implicitly supporting multiple runtimes.
+- **Interpreter lifecycle** enforces explicit, process-aware Python initialization and finalization. One runtime owns the process's interpreter, and one thread owns that runtime; see "Threading and the GIL" below.
 - **Script and module loader** manages application-supplied script paths and imports; maïs does not ship `guillaume` scripts.
 - **Hook invocation** runs named Python functions at points chosen by the host and returns results or actionable errors.
 - **Diagnostics** captures Python exceptions with traceback information for host logs or UI display. It does not require a UI toolkit.
@@ -53,9 +53,42 @@ Adapter owns: binding definitions, not the host's engine instance.
 Python sees: narrowly exposed host objects with documented lifetimes.
 ```
 
-The host must create the engine only once. Bindings can reference that host-owned instance or a facade; they should not let `Engine()` in Python silently create a second one. The engine and other injected native objects must outlive all Python wrappers that refer to them. Release Python callbacks and wrappers before interpreter finalization. Document GIL ownership and the thread on which callbacks execute.
+The host must create the engine only once. Bindings can reference that host-owned instance or a facade; they should not let `Engine()` in Python silently create a second one. The engine and other injected native objects must outlive all Python wrappers that refer to them. Release Python callbacks and wrappers before interpreter finalization.
 
 An abstract `IEngine` is not required in maïs for the `evan` integration. Introduce an engine-neutral contract only if more than one actual integration demonstrates a common need; otherwise keep adaptation at the boundary.
+
+## Threading and the GIL
+
+This is a decided question, not an open one: [THREADING.md](THREADING.md) is the
+decision record.
+
+- The thread that calls `initialize()` owns the interpreter for as long as the
+  runtime is running. maïs keeps the GIL on that thread and never releases it
+  between calls; host bindings are written for that thread and reach host state
+  only while a hook runs.
+- Every Python-touching method must be called from that thread. A call from
+  another thread returns `ErrorCode::WrongThread` instead of blocking; the
+  runtime is otherwise unaffected.
+- The runtime is not internally synchronized. Reading its state from a second
+  thread is the host's problem, not a supported mode.
+- A running runtime must also be destroyed on the owning thread, because the
+  destructor stops the interpreter and has no way to report a violation.
+
+Two alternatives were weighed and rejected or deferred:
+
+- **Releasing the GIL between calls** would allow cross-thread entry but buys no
+  parallelism, and it moves the hard problem (finalization must still happen on
+  the initializing thread, with every other caller quiesced) onto the runtime
+  while pushing data races onto every binding author. Rejected.
+- **An explicit dispatch queue** that marshals work onto the interpreter thread
+  is the intended design if a consumer ever needs scripts callable from another
+  thread. It changes the host's contract — the host must pump the queue — so it
+  is tracked as MAIS-4.1 and gated on an answered Q5, not built speculatively.
+
+The consequence for the consumer is a schedule, not a lock: `guillaume` runs
+hooks where its frame loop says, on the scripting owner's thread. If scripting
+must later move off that thread, the adapter needs a handoff design; grabbing the
+GIL from the render thread is exactly the unsupported mode.
 
 ## Application lifecycle
 
@@ -90,7 +123,16 @@ sequenceDiagram
     Host->>Engine: destroy engine
 ```
 
-The names `configure`, `on_start`, `on_update`, and `on_shutdown` are example host-defined hooks, not a promise that they already exist. The exact position of `on_update` relative to engine updates and rendering must be specified by each consumer. Script errors reach the host with traceback context and a per-call `FailurePolicy` (`Continue`, `Stop`, `ReportOnce`), so continuing or stopping is one decision the host makes instead of an `if` around every call; see [ERROR_HANDLING.md](ERROR_HANDLING.md#call-policy-and-timing).
+Every arrow into the runtime in that diagram leaves from the same thread: the
+one that started it.
+
+The names `configure`, `on_start`, `on_update`, and `on_shutdown` are example
+host-defined hooks, not a promise that they already exist. The exact position
+of `on_update` relative to engine updates and rendering must be specified by
+each consumer. Script errors reach the host with traceback context and a
+per-call `FailurePolicy` (`Continue`, `Stop`, `ReportOnce`), so continuing or
+stopping is one decision the host makes instead of an `if` around every call;
+see [ERROR_HANDLING.md](ERROR_HANDLING.md#call-policy-and-timing).
 
 ## Engine integration
 
@@ -109,6 +151,25 @@ maïs does not contain `Panel`, `Button`, `Console`, `EngineSettings`, or `Scene
 - Export a reusable CMake target if external projects need to install and consume the library; verify it with a separate test application.
 - Keep engine adapters and consumer scripts out of the core target.
 - Do not introduce the old renderer project's GLFW/OpenXR/Vulkan platform matrix into maïs. Support for particular operating systems and Python versions should be documented only after validation.
+
+### Enforcing the boundary
+
+`./scripts/check-boundaries.sh` is the single command, run unchanged by CI, that
+verifies this document rather than trusting review:
+
+- `headers/` and `sources/` may include only the C++ standard library, CPython's
+  C API, pybind11, and maïs's own headers. The scan reads `#include` directives
+  only, so comments and documentation may discuss `evan` and `guillaume`.
+- A standalone configure, with no consumer present, fails unless the `mais`
+  target's transitive link interface stays within `pybind11::embed` and the
+  Python runtime that pybind11 exposes. The same check runs during every
+  configure (`MAIS_CHECK_BOUNDARIES`, on by default), so a consumer that adds a
+  dependency to the target after `add_subdirectory()` fails its own build.
+
+Both halves are default-deny: a dependency that has not been explicitly approved
+is rejected, whether or not the check knows its name. `--verify` proves the gate
+still rejects a forbidden include, a dependency a consumer pushes into the
+target, and a dependency hidden behind the approved pybind11 target.
 
 ## Design goal
 
