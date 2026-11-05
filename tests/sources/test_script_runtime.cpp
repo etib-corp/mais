@@ -1287,6 +1287,40 @@ TEST(CallPolicyTest, ReportsTheSameHookAgainAfterARecovery)
 	EXPECT_EQ(counter.count(), 0);
 }
 
+/// The counters describe the hook, not the overload, so a policy adopted
+/// mid-run sees a failure an Error-returning call already reported as a repeat.
+TEST(CallPolicyTest, SuppressesAFailureAnUntypedCallAlreadyReported)
+{
+	mais::ScriptRuntime runtime;
+	mais_test::FakeCounter counter("policy-mixed");
+
+	mais_test::bindFakeHost(runtime, counter);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+
+	mais::Error reported = runtime.call("fake_host", "explode");
+	ASSERT_EQ(reported.code(), mais::ErrorCode::InvocationFailed);
+
+	// The failure is already counted, so the first policy call sees the same
+	// failure again and suppresses it instead of reporting it a second time.
+	mais::CallReport suppressed =
+		runtime.call(mais::FailurePolicy::ReportOnce, "fake_host", "explode");
+	EXPECT_TRUE(suppressed.isOk());
+	EXPECT_TRUE(suppressed.suppressed);
+	EXPECT_EQ(suppressed.consecutiveFailures, 2U);
+
+	// A policy that keeps reporting still sees the live failure and the true
+	// streak length, so nothing is lost beyond that first duplicate.
+	mais::CallReport continued =
+		runtime.call(mais::FailurePolicy::Continue, "fake_host", "explode");
+	EXPECT_EQ(continued.error.code(), mais::ErrorCode::InvocationFailed);
+	EXPECT_FALSE(continued.suppressed);
+	EXPECT_EQ(continued.consecutiveFailures, 3U);
+	EXPECT_TRUE(runtime.isRunning());
+}
+
 TEST(CallPolicyTest, StopPolicyMarksTheReportWithoutStoppingTheRuntime)
 {
 	mais::ScriptRuntime runtime;

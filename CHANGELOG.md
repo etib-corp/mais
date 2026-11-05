@@ -22,8 +22,11 @@ as part of this scripting library. 1.0.0 is the first release of this runtime.
   failure of the same hook once per run and returns `Ok` with `suppressed` for
   the repeats; `Stop` sets `stopRequested` without stopping the interpreter.
   Counters reset on `initialize()`/`shutdown()`, a successful call ends a
-  streak, and the `Error`-returning overloads keep their previous behaviour and
-  per-call cost.
+  streak, and the `Error`-returning overloads keep their previous behaviour:
+  they measure and suppress nothing, add one emptiness check to the success
+  path, and a failure pays for one map key and one signature string. There is
+  deliberately no `call<T>(FailurePolicy, ...)`; the surface and its rationale
+  are recorded in `docs/TECHNICAL_CHOICES.md`.
 - `mais::Result<T>` and typed `call<T>()` / `callOptional<T>()` overloads: a
   script's `bool`, integer, float, or string return value can be read back
   without changing the 1.0.0 signatures. A `None` result is a successful call

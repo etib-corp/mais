@@ -201,9 +201,12 @@ A suppressed repeat carries an `Ok` error, so `if (report)` logs the first
 failure and nothing after it. The report keeps the accounting for a console
 that wants to show how many were folded away: `consecutiveFailures` and
 `suppressed`. The overloads with a policy are the only ones that measure and
-suppress; the `Error`-returning overloads keep their previous behaviour and
-their per-call cost. A host that pairs a policy with the names from
-`listFunctions()` has a per-hook policy without a table of its own.
+suppress; the `Error`-returning overloads keep their previous behaviour, which
+is not quite free of the new bookkeeping: their success path adds one emptiness
+check, and a failure pays for one map key and one signature string, so that the
+counters stay truthful whichever overload a host mixes in. A host that pairs a
+policy with the names from `listFunctions()` has a per-hook policy without a
+table of its own.
 
 `FailurePolicy::Stop` never stops the interpreter and never throws: it only sets
 `stopRequested`, so the host leaves its loop when it is ready and calls
@@ -224,6 +227,23 @@ distinguishes categories.
   and breaks again is reported again.
 - Each hook has its own counters: a failure of `on_start` never suppresses one
   of `on_update`.
+
+### Adopting a policy mid-session
+
+Every overload updates the counters, so a failure that an `Error`-returning
+call already reported is a repeat by the time a policy sees it:
+
+```cpp
+runtime.call("game", "on_update");  // fails: reported, and counted
+runtime.call(mais::FailurePolicy::ReportOnce, "game", "on_update");
+// same failure -> Ok with suppressed set, nothing logged
+```
+
+That follows from the rule above and is deliberate: the counters describe the
+hook, not the overload. A host that switches to a policy while a hook is already
+failing should adopt it before the first call of the run, or treat `suppressed`
+on its first policy call as "already reported" rather than as "nothing
+happened" — `consecutiveFailures` still carries the true streak length.
 
 ### Where the counters live
 
@@ -249,6 +269,21 @@ the Python call, and the capture of its failure, so the number is what the host
 pays for that hook rather than a benchmark estimate. A console can chart it per
 hook and a bench cannot disagree with it: `benchmarks/benchmark_main.cpp`
 reports the same value as the `runtime_ns_per_call` counter.
+
+### Why there is no `call<T>(FailurePolicy, ...)`
+
+The policy overlays the untyped calls only. A hook that returns a value is a
+query, not the per-frame failure path the policy exists for: `Stop` has nothing
+to mean, and `ReportOnce` would have to decide what a suppressed value is. A
+caller that wants both a value and a duration can time the typed call itself
+with `std::chrono::steady_clock`. Timing a value-returning call from inside the
+runtime is a follow-up, taken only if a consumer needs it.
+
+The resulting surface — four policy-bearing variants next to the existing eight
+— is recorded as final in
+[TECHNICAL_CHOICES.md](TECHNICAL_CHOICES.md#call-policy-and-timing-surface);
+further growth goes through a `CallOptions` consolidation reviewed at the
+API-freeze milestone rather than through more overloads.
 
 ## Inspecting a module without running it
 

@@ -421,8 +421,12 @@ namespace mais
 		///
 		/// This is the overload a host uses for a hook it invokes every frame.
 		/// The call is timed with a monotonic clock and the per-hook failure
-		/// counters are updated; the Error-returning overloads below keep their
-		/// previous behaviour and their per-call cost.
+		/// counters are updated; the Error-returning overloads below measure
+		/// and suppress nothing, and pay for the counters only on a failure.
+		///
+		/// There is deliberately no `call<T>(FailurePolicy, ...)`: a value
+		/// returning hook is not the per-frame failure path this policy
+		/// targets, and timing one is a follow-up if a consumer needs it.
 		///
 		/// Repeated failure
 		/// ----------------
@@ -436,6 +440,11 @@ namespace mais
 		/// counters live in this runtime for the current run: initialize() and
 		/// shutdown() clear them, and a successful call ends the streak, so a
 		/// suppression never survives a restart or a recovery.
+		///
+		/// Every overload updates the counters, so a failure that an
+		/// Error-returning call() already reported is suppressed by the first
+		/// ReportOnce call that repeats it: a host adopting a policy mid-run
+		/// sees `suppressed` before it has seen the error.
 		///
 		/// A call rejected before the hook runs (empty name, runtime not
 		/// initialized, a thread that does not own the interpreter) is reported
