@@ -499,7 +499,7 @@ namespace mais
 			py::object sysModules = py::module_::import("sys").attr("modules");
 			sysModules[binding.name.c_str()] = module;
 
-			try {gil_scoped_acquire
+			try {
 				// The handle carries the runtime's own module wrapper, so
 				// PythonModule::as<pybind11::module_>() hands the callback the
 				// module it should populate.
