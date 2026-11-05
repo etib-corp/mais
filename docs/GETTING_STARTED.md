@@ -120,7 +120,9 @@ The thread that called `initialize()` owns the interpreter, and maïs keeps the
 GIL there. Every hook, `loadModule()`, `addSearchPath()` while running, and
 `shutdown()` must be called from that thread; a call from any other thread
 returns `mais::ErrorCode::WrongThread` and changes nothing. The runtime is not
-internally synchronized either, so do not read its state from a second thread.
+internally synchronized either, so do not read its state from a second thread,
+and serialize any `registerModule()` or `addSearchPath()` that runs before
+`initialize()` against the owning thread.
 The decision and its alternatives are in [THREADING.md](THREADING.md).
 
 If scripting ever needs to move off that thread, do not try to grab the GIL from

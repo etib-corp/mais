@@ -40,7 +40,10 @@ Concretely:
 - The runtime is not internally synchronized. The accessors that only read C++
   state (`isRunning()`, `searchPaths()`, `bindings()`, `isModuleLoaded()`) are
   safe only when the host itself guarantees that no state-changing call runs
-  concurrently.
+  concurrently. That includes the mutators that never touch Python:
+  `registerModule()` and `addSearchPath()` before `initialize()` edit shared
+  state, so a host that queues bindings or paths from a second thread must
+  serialize them against the owning thread's setup itself.
 
 ## What the host must guarantee
 
@@ -67,8 +70,10 @@ Concretely:
 | `hasFunction()` / `listFunctions()` | reads the module namespace | `WrongThread`, nothing is inspected |
 | `loadModule()` | imports the module | `WrongThread`, nothing is imported |
 | `addSearchPath()` while running | prepends to `sys.path` | `WrongThread`, the path is not recorded |
+| `addSearchPath()` while stopped | records the path, no Python involved | unsynchronized; the host must not race it with the owner's setup |
 | `shutdown()` | finalizes Python | `WrongThread`, the runtime keeps running |
-| `registerModule()` | fails with `AlreadyInitialized` | same |
+| `registerModule()` while running | fails with `AlreadyInitialized` | same |
+| `registerModule()` while stopped | queues the module, no Python involved | unsynchronized; the host must not race it with the owner's setup |
 | read-only accessors | reads C++ state | unsynchronized; the host must not race them |
 | `~ScriptRuntime()` while running | finalizes Python | **not detectable** — no return path to report through, and the interpreter cannot be finalized from a thread that does not own it |
 
@@ -185,8 +190,9 @@ Tested in [`tests/sources/test_thread_affinity.cpp`](../tests/sources/test_threa
 Not tested, deliberately:
 
 - **An actual deadlock.** With the refusal in place there is no reachable
-  deadlock to assert, and a test for the old behaviour would hang the suite
-  instead of failing it.
+  deadlock to assert. The tests therefore bound every call from a second thread
+  with a timeout: removing a refusal fails the test with a message instead of
+  stalling the run.
 - **The destructor from the wrong thread.** The violation cannot be reported and
   would have to be observed as undefined behaviour, so it is documented rather
   than tested.

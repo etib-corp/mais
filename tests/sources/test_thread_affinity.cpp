@@ -26,8 +26,14 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <exception>
+#include <future>
+#include <memory>
+#include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace
@@ -37,6 +43,47 @@ namespace
 		static const std::string directory = MAIS_TEST_SCRIPT_DIR;
 		return directory;
 	}
+
+	/// How long a call from a second thread may take. A correct refusal returns
+	/// at once, so reaching this bound means the thread is blocked.
+	constexpr std::chrono::seconds refusalTimeout { 10 };
+
+	/// Failure message for a call from a second thread that never came back.
+	std::string blockedMessage(const std::string &operations)
+	{
+		return operations + " did not return within "
+			+ std::to_string(refusalTimeout.count())
+			+ "s: a second thread is waiting for the GIL instead of being "
+			  "refused with WrongThread";
+	}
+
+	/// \brief Runs `work` on a second thread and returns its result.
+	///
+	/// The thread is detached rather than joined on purpose. If the affinity
+	/// guard regresses, the call waits for a GIL the owning thread never
+	/// releases, and join() would stall the whole test binary instead of
+	/// failing one test. The bounded wait turns that into a failed expectation,
+	/// and callers capture their runtime through shared_ptr so a thread left
+	/// waiting cannot outlive the runtime it is using.
+	template<typename Result, typename Work>
+	std::optional<Result> runOnForeignThread(Work work)
+	{
+		auto promise			   = std::make_shared<std::promise<Result>>();
+		std::future<Result> future = promise->get_future();
+
+		std::thread([promise, work = std::move(work)] {
+			try {
+				promise->set_value(work());
+			} catch (...) {
+				promise->set_exception(std::current_exception());
+			}
+		}).detach();
+
+		if (future.wait_for(refusalTimeout) != std::future_status::ready) {
+			return std::nullopt;
+		}
+		return future.get();
+	}
 }	 // namespace
 
 /// The threading contract from docs/THREADING.md: only the thread that called
@@ -44,172 +91,187 @@ namespace
 /// of blocking on a GIL that thread never releases.
 TEST(ThreadAffinityTest, RefusesPythonCallsFromAnotherThread)
 {
-	mais::ScriptRuntime runtime;
+	auto runtime = std::make_shared<mais::ScriptRuntime>();
 	mais_test::FakeCounter counter("affinity");
 
-	mais_test::bindFakeHost(runtime, counter);
-	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
-	ASSERT_TRUE(runtime.initialize().isOk());
-	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+	mais_test::bindFakeHost(*runtime, counter);
+	ASSERT_TRUE(runtime->addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime->initialize().isOk());
+	ASSERT_TRUE(runtime->loadModule("fake_host").isOk());
 
-	mais::Error callError;
-	mais::Error loadError;
-	mais::Error searchPathError;
-	mais::Error shutdownError;
+	struct Refusals {
+		mais::Error call;
+		mais::Error loadModule;
+		mais::Error addSearchPath;
+		mais::Error shutdown;
+	};
 
-	std::thread other([&] {
-		callError		= runtime.call("fake_host", "bump");
-		loadError		= runtime.loadModule("fake_host");
-		searchPathError = runtime.addSearchPath(scriptDirectory());
-		shutdownError	= runtime.shutdown();
+	std::optional<Refusals> refusals = runOnForeignThread<Refusals>([runtime] {
+		return Refusals {
+			runtime->call("fake_host", "bump"),
+			runtime->loadModule("fake_host"),
+			runtime->addSearchPath(scriptDirectory()),
+			runtime->shutdown(),
+		};
 	});
-	other.join();
+	ASSERT_TRUE(refusals.has_value())
+		<< blockedMessage("call(), loadModule(), addSearchPath(), shutdown()");
 
-	EXPECT_EQ(callError.code(), mais::ErrorCode::WrongThread);
-	EXPECT_EQ(loadError.code(), mais::ErrorCode::WrongThread);
-	EXPECT_EQ(searchPathError.code(), mais::ErrorCode::WrongThread);
-	EXPECT_EQ(shutdownError.code(), mais::ErrorCode::WrongThread);
-	EXPECT_FALSE(callError.message().empty());
-	EXPECT_FALSE(mais::isFatal(callError.code()));
+	EXPECT_EQ(refusals->call.code(), mais::ErrorCode::WrongThread);
+	EXPECT_EQ(refusals->loadModule.code(), mais::ErrorCode::WrongThread);
+	EXPECT_EQ(refusals->addSearchPath.code(), mais::ErrorCode::WrongThread);
+	EXPECT_EQ(refusals->shutdown.code(), mais::ErrorCode::WrongThread);
+	EXPECT_FALSE(refusals->call.message().empty());
+	EXPECT_FALSE(mais::isFatal(refusals->call.code()));
 
 	// None of the refused calls changed anything: no script ran, the runtime
 	// still owns its interpreter, and the owning thread keeps working.
 	EXPECT_EQ(counter.count(), 0);
-	EXPECT_TRUE(runtime.isRunning());
-	EXPECT_EQ(runtime.searchPaths().size(), 1U);
+	EXPECT_TRUE(runtime->isRunning());
+	EXPECT_EQ(runtime->searchPaths().size(), 1U);
 
-	mais::Error error = runtime.call("fake_host", "bump");
+	mais::Error error = runtime->call("fake_host", "bump");
 	ASSERT_TRUE(error.isOk()) << error.toString();
 	EXPECT_EQ(counter.count(), 1);
 
-	ASSERT_TRUE(runtime.shutdown().isOk());
+	ASSERT_TRUE(runtime->shutdown().isOk());
 }
 
 /// Ownership is established by initialize(), not by where the runtime object
 /// was constructed, so a dedicated script thread is a supported arrangement.
 TEST(ThreadAffinityTest, TheInitializingThreadBecomesTheOwner)
 {
-	mais::ScriptRuntime runtime;
+	auto runtime = std::make_shared<mais::ScriptRuntime>();
 	mais_test::FakeCounter counter("script-thread");
 
-	mais_test::bindFakeHost(runtime, counter);
-	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	mais_test::bindFakeHost(*runtime, counter);
+	ASSERT_TRUE(runtime->addSearchPath(scriptDirectory()).isOk());
 
-	mais::Error workerError;
-	std::thread worker([&] {
-		workerError = runtime.initialize();
-		if (workerError) {
-			return;
-		}
-		workerError = runtime.loadModule("fake_host");
-		if (workerError) {
-			return;
-		}
-		workerError = runtime.call("fake_host", "bump");
-		if (workerError) {
-			return;
-		}
-		workerError = runtime.shutdown();
-	});
-	worker.join();
+	std::optional<mais::Error> workerError =
+		runOnForeignThread<mais::Error>([runtime] {
+			mais::Error error = runtime->initialize();
+			if (error) {
+				return error;
+			}
+			error = runtime->loadModule("fake_host");
+			if (error) {
+				return error;
+			}
+			error = runtime->call("fake_host", "bump");
+			if (error) {
+				return error;
+			}
+			return runtime->shutdown();
+		});
+	ASSERT_TRUE(workerError.has_value())
+		<< blockedMessage("the script thread's initialize(), loadModule(), "
+						  "call(), shutdown()");
 
-	EXPECT_TRUE(workerError.isOk()) << workerError.toString();
+	EXPECT_TRUE(workerError->isOk()) << workerError->toString();
 	EXPECT_EQ(counter.count(), 1);
-	EXPECT_FALSE(runtime.isRunning());
+	EXPECT_FALSE(runtime->isRunning());
 }
 
 /// Every initialize() re-establishes the owner, so ownership follows the
 /// restart rather than the lifetime of the runtime object.
 TEST(ThreadAffinityTest, OwnershipFollowsTheMostRecentInitialize)
 {
-	mais::ScriptRuntime runtime;
+	auto runtime = std::make_shared<mais::ScriptRuntime>();
 	mais_test::FakeCounter counter("handover");
 
-	mais_test::bindFakeHost(runtime, counter);
-	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	mais_test::bindFakeHost(*runtime, counter);
+	ASSERT_TRUE(runtime->addSearchPath(scriptDirectory()).isOk());
 
-	ASSERT_TRUE(runtime.initialize().isOk());
-	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
-	ASSERT_TRUE(runtime.call("fake_host", "bump").isOk());
-	ASSERT_TRUE(runtime.shutdown().isOk());
+	ASSERT_TRUE(runtime->initialize().isOk());
+	ASSERT_TRUE(runtime->loadModule("fake_host").isOk());
+	ASSERT_TRUE(runtime->call("fake_host", "bump").isOk());
+	ASSERT_TRUE(runtime->shutdown().isOk());
 
-	mais::Error workerError;
-	std::thread worker([&] {
-		workerError = runtime.initialize();
-		if (workerError) {
-			return;
-		}
-		workerError = runtime.loadModule("fake_host");
-		if (workerError) {
-			return;
-		}
-		workerError = runtime.call("fake_host", "bump");
-		if (workerError) {
-			return;
-		}
-		// The owner must also be the one to stop: shutting down from another
-		// thread is refused, and an owner that exits leaves a runtime nobody
-		// can finalize.
-		workerError = runtime.shutdown();
-	});
-	worker.join();
+	std::optional<mais::Error> workerError =
+		runOnForeignThread<mais::Error>([runtime] {
+			mais::Error error = runtime->initialize();
+			if (error) {
+				return error;
+			}
+			error = runtime->loadModule("fake_host");
+			if (error) {
+				return error;
+			}
+			error = runtime->call("fake_host", "bump");
+			if (error) {
+				return error;
+			}
+			// The owner must also be the one to stop: shutting down from
+			// another thread is refused, and an owner that exits leaves a
+			// runtime nobody can finalize.
+			return runtime->shutdown();
+		});
+	ASSERT_TRUE(workerError.has_value())
+		<< blockedMessage("the restarted script thread's initialize(), "
+						  "loadModule(), call(), shutdown()");
 
-	ASSERT_TRUE(workerError.isOk()) << workerError.toString();
+	ASSERT_TRUE(workerError->isOk()) << workerError->toString();
 	EXPECT_EQ(counter.count(), 2);
 
 	// The runtime is free again, and this thread becomes the new owner.
-	ASSERT_TRUE(runtime.initialize().isOk());
-	ASSERT_TRUE(runtime.shutdown().isOk());
+	ASSERT_TRUE(runtime->initialize().isOk());
+	ASSERT_TRUE(runtime->shutdown().isOk());
 }
 
 /// Introspection and typed calls read Python like call() does, so they obey the
 /// same contract: a foreign thread is refused instead of waiting on the GIL.
 TEST(ThreadAffinityTest, RefusesIntrospectionAndTypedCallsFromAnotherThread)
 {
-	mais::ScriptRuntime runtime;
+	auto runtime = std::make_shared<mais::ScriptRuntime>();
 	mais_test::FakeCounter counter("introspection");
 
-	mais_test::bindFakeHost(runtime, counter);
-	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
-	ASSERT_TRUE(runtime.initialize().isOk());
-	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+	mais_test::bindFakeHost(*runtime, counter);
+	ASSERT_TRUE(runtime->addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime->initialize().isOk());
+	ASSERT_TRUE(runtime->loadModule("fake_host").isOk());
 
-	mais::Error hasFunctionError;
-	mais::Error listFunctionsError;
-	mais::Error typedCallError;
-	mais::Error typedOptionalError;
+	struct Refusals {
+		mais::Error hasFunction;
+		mais::Error listFunctions;
+		mais::Error typedCall;
+		mais::Error typedOptional;
+	};
 
-	std::thread other([&] {
-		hasFunctionError   = runtime.hasFunction("fake_host", "bump").error();
-		listFunctionsError = runtime.listFunctions("fake_host").error();
-		typedCallError	   = runtime.call<bool>("fake_host", "flag").error();
-		// An absent optional hook is success on the owning thread; from the
-		// wrong thread it must still be refused, never reported as "no hook".
-		typedOptionalError =
-			runtime.callOptional<bool>("fake_host", "absent_hook").error();
+	std::optional<Refusals> refusals = runOnForeignThread<Refusals>([runtime] {
+		return Refusals {
+			runtime->hasFunction("fake_host", "bump").error(),
+			runtime->listFunctions("fake_host").error(),
+			runtime->call<bool>("fake_host", "flag").error(),
+			// An absent optional hook is success on the owning thread;
+			// from the wrong thread it must still be refused, never
+			// reported as "no hook".
+			runtime->callOptional<bool>("fake_host", "absent_hook").error(),
+		};
 	});
-	other.join();
+	ASSERT_TRUE(refusals.has_value())
+		<< blockedMessage("hasFunction(), listFunctions(), call<bool>(), "
+						  "callOptional<bool>()");
 
-	EXPECT_EQ(hasFunctionError.code(), mais::ErrorCode::WrongThread);
-	EXPECT_EQ(listFunctionsError.code(), mais::ErrorCode::WrongThread);
-	EXPECT_EQ(typedCallError.code(), mais::ErrorCode::WrongThread);
-	EXPECT_EQ(typedOptionalError.code(), mais::ErrorCode::WrongThread);
+	EXPECT_EQ(refusals->hasFunction.code(), mais::ErrorCode::WrongThread);
+	EXPECT_EQ(refusals->listFunctions.code(), mais::ErrorCode::WrongThread);
+	EXPECT_EQ(refusals->typedCall.code(), mais::ErrorCode::WrongThread);
+	EXPECT_EQ(refusals->typedOptional.code(), mais::ErrorCode::WrongThread);
 
 	// The owning thread still gets the real answers.
-	mais::Result<bool> present = runtime.hasFunction("fake_host", "bump");
+	mais::Result<bool> present = runtime->hasFunction("fake_host", "bump");
 	ASSERT_TRUE(present.isOk()) << present.error().toString();
 	EXPECT_TRUE(present.value());
 
 	mais::Result<std::vector<std::string>> hooks =
-		runtime.listFunctions("fake_host");
+		runtime->listFunctions("fake_host");
 	ASSERT_TRUE(hooks.isOk()) << hooks.error().toString();
 	EXPECT_FALSE(hooks.value().empty());
 
-	mais::Result<bool> typed = runtime.call<bool>("fake_host", "flag");
+	mais::Result<bool> typed = runtime->call<bool>("fake_host", "flag");
 	ASSERT_TRUE(typed.isOk()) << typed.error().toString();
 	EXPECT_TRUE(typed.value());
 
-	EXPECT_TRUE(runtime.callOptional<bool>("fake_host", "absent_hook").isOk());
+	EXPECT_TRUE(runtime->callOptional<bool>("fake_host", "absent_hook").isOk());
 
-	ASSERT_TRUE(runtime.shutdown().isOk());
+	ASSERT_TRUE(runtime->shutdown().isOk());
 }

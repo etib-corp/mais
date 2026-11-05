@@ -181,6 +181,11 @@ namespace mais
 	/// bindings(), isModuleLoaded()) are safe only when the host itself
 	/// guarantees that no state-changing call runs concurrently.
 	///
+	/// That guarantee covers the mutators that run without the interpreter:
+	/// registerModule() and addSearchPath() before initialize() edit the same
+	/// shared state, so a host that queues bindings or paths from a second
+	/// thread must serialize those calls against the owner's setup itself.
+	///
 	/// The one violation maïs cannot report is destroying a running runtime on
 	/// another thread: ~ScriptRuntime() stops the interpreter and has no way
 	/// to fail, so it must run on the owning thread too. A runtime whose owner

@@ -35,8 +35,6 @@ namespace mais
 				return "NotInitialized";
 			case ErrorCode::AlreadyInitialized:
 				return "AlreadyInitialized";
-			case ErrorCode::WrongThread:
-				return "WrongThread";
 			case ErrorCode::InterpreterFailure:
 				return "InterpreterFailure";
 			case ErrorCode::InvalidArgument:
@@ -51,6 +49,8 @@ namespace mais
 				return "TypeMismatch";
 			case ErrorCode::InvocationFailed:
 				return "InvocationFailed";
+			case ErrorCode::WrongThread:
+				return "WrongThread";
 		}
 		return "Unknown";
 	}
