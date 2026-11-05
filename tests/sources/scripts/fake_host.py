@@ -4,6 +4,8 @@ The host injects ``host.counter``, a native FakeCounter, before this module is
 imported.
 """
 
+import time
+
 import host
 
 # A module-level attribute that is not callable: hasFunction() must report a
@@ -36,6 +38,14 @@ def apply(label, enabled):
 
 def explode():
     raise ValueError("boom from Python")
+
+
+def explode_with(message):
+    raise ValueError(message)
+
+
+def sleep_ms(milliseconds):
+    time.sleep(milliseconds / 1000.0)
 
 
 def divide(dividend, divisor):

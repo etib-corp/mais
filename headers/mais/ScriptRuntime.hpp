@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
@@ -132,6 +133,88 @@ namespace mais
 		Value _value;
 	};
 
+	/// \brief What a policy-bearing call does with a failure.
+	///
+	/// A policy never stops the interpreter and never throws. The runtime
+	/// reports and the host, which owns its loop, decides when to leave it.
+	///
+	/// A host applies a policy per call, which also makes it per hook: pair
+	/// the policy it wants with the name it is about to invoke. listFunctions()
+	/// supplies the names when the schedule is built dynamically.
+	enum class FailurePolicy {
+		/// Report every failure and leave the decision to the host. This is the
+		/// behaviour of the Error-returning call() overloads.
+		Continue,
+
+		/// Report the failure and mark the report with stopRequested, so a host
+		/// can leave its loop without inspecting the error code. The runtime
+		/// itself keeps running.
+		Stop,
+
+		/// Report the first failure of a hook once per run, then suppress the
+		/// identical repeats that follow it. A successful call ends the streak,
+		/// so a hook that recovers and breaks again is reported again.
+		ReportOnce,
+	};
+
+	/// \brief The outcome of one call: its error, how long it took, and the
+	/// failure accounting the policy used.
+	///
+	/// A suppressed repeat of an identical failure has an Ok `error` and
+	/// `suppressed` set, so the common loop needs no per-call branching beyond
+	/// the one it already writes:
+	///
+	/// ```cpp
+	/// mais::CallReport report = runtime.callOptional(
+	///     mais::FailurePolicy::ReportOnce, "game", "on_update",
+	///     {mais::ScriptArgument::number(deltaSeconds)});
+	/// if (report.stopRequested) {
+	///     break;                      // only under FailurePolicy::Stop
+	/// }
+	/// if (report) {
+	///     console.log(report.error);  // once per failure streak
+	/// }
+	/// console.timing("on_update", report.duration);
+	/// ```
+	struct CallReport {
+		/// The failure, or an Ok error when the call succeeded or the failure
+		/// was suppressed as an identical repeat.
+		Error error;
+
+		/// \brief How long the call took, measured by the runtime.
+		///
+		/// The clock spans validation, argument conversion, the Python call,
+		/// and the capture of its failure, so the number is the cost the host
+		/// pays for that hook rather than a benchmark estimate. It is only
+		/// measured by the policy-bearing overloads.
+		std::chrono::nanoseconds duration {};
+
+		/// \brief Consecutive failures of this hook in the current run.
+		///
+		/// Zero after a success, and zero for a call rejected before the hook
+		/// ran (an empty name, a runtime that is not initialized).
+		std::uint64_t consecutiveFailures = 0;
+
+		/// True when this failure repeats the previous one and the policy
+		/// suppressed it; `error` is then Ok.
+		bool suppressed = false;
+
+		/// True when the policy is Stop and the call failed.
+		bool stopRequested = false;
+
+		/// True when the report carries no failure.
+		[[nodiscard]] bool isOk() const noexcept
+		{
+			return error.isOk();
+		}
+
+		/// True when an error occurred; mirrors Error's operator bool.
+		explicit operator bool() const noexcept
+		{
+			return !error.isOk();
+		}
+	};
+
 	/// \brief Owns an embedded Python interpreter and runs host-defined
 	/// scripts.
 	///
@@ -174,12 +257,13 @@ namespace mais
 	/// Every method that touches Python must therefore be called from that
 	/// thread — initialize(), shutdown(), loadModule(), addSearchPath() while
 	/// the runtime is running, hasFunction(), listFunctions(), and every
-	/// call()/callOptional() overload including the typed ones. A call from
-	/// any other thread is refused with ErrorCode::WrongThread instead of
-	/// blocking on the GIL. The runtime is not internally synchronized, so the
-	/// accessors that only read C++ state (isRunning(), searchPaths(),
-	/// bindings(), isModuleLoaded()) are safe only when the host itself
-	/// guarantees that no state-changing call runs concurrently.
+	/// call()/callOptional() overload, including the typed and the
+	/// policy-bearing ones. A call from any other thread is refused with
+	/// ErrorCode::WrongThread instead of blocking on the GIL. The runtime is
+	/// not internally synchronized, so the accessors that only read C++ state
+	/// (isRunning(), searchPaths(), bindings(), isModuleLoaded()) are safe only
+	/// when the host itself guarantees that no state-changing call runs
+	/// concurrently.
 	///
 	/// That guarantee covers the mutators that run without the interpreter:
 	/// registerModule() and addSearchPath() before initialize() edit the same
@@ -196,6 +280,21 @@ namespace mais
 	/// through Error so a failed hook cannot silently unwind the host's loop.
 	/// See docs/THREADING.md for the decision and the alternatives that were
 	/// rejected.
+	///
+	/// Call policy and timing
+	/// ----------------------
+	/// The Error-returning call() and callOptional() overloads report every
+	/// failure, as they always have. The overloads that take a FailurePolicy
+	/// first report a CallReport instead: the same error, the duration the
+	/// runtime measured, and the per-hook failure count the policy used. A
+	/// repeatedly failing hook therefore cannot end the host loop unless the
+	/// host asks for FailurePolicy::Stop and leaves the loop itself.
+	///
+	/// The failure counters belong to one run of one runtime. initialize() and
+	/// shutdown() clear them, so a restart never inherits a suppression, and
+	/// two runtimes never share state. Only the policy-bearing overloads decide
+	/// what to report; every call updates the counters, so a success through
+	/// any overload ends the hook's streak.
 	class ScriptRuntime
 	{
 		public:
@@ -297,9 +396,10 @@ namespace mais
 
 		/// \brief Calls `functionName` in `moduleName` with no arguments.
 		///
-		/// Every call() and callOptional() overload, typed or not, reports
-		/// WrongThread when invoked from a thread other than the one that
-		/// called initialize().
+		/// Every call() and callOptional() overload, typed, policy-bearing, or
+		/// neither, reports WrongThread when invoked from a thread other than
+		/// the one that called initialize(). A refused policy-bearing call is
+		/// not counted as a hook failure.
 		Error call(std::string_view moduleName, std::string_view functionName);
 
 		/// Calls `functionName` in `moduleName` with the given arguments.
@@ -315,6 +415,68 @@ namespace mais
 		Error callOptional(std::string_view moduleName,
 						   std::string_view functionName,
 						   std::initializer_list<ScriptArgument> arguments);
+
+		/// \brief Calls `functionName`, measures it, and applies `policy` to a
+		/// failure.
+		///
+		/// This is the overload a host uses for a hook it invokes every frame.
+		/// The call is timed with a monotonic clock and the per-hook failure
+		/// counters are updated; the Error-returning overloads below measure
+		/// and suppress nothing, and pay for the counters only on a failure.
+		///
+		/// There is deliberately no `call<T>(FailurePolicy, ...)`: a value
+		/// returning hook is not the per-frame failure path this policy
+		/// targets, and timing one is a follow-up if a consumer needs it.
+		///
+		/// Repeated failure
+		/// ----------------
+		/// A failure is "repeated" when the same hook (module and function)
+		/// fails consecutively with the same ErrorCode, Python exception type,
+		/// and message. The traceback is not part of that identity: the same
+		/// statement can move between lines while the failure stays the same.
+		///
+		/// FailurePolicy::ReportOnce returns the first failure of a streak as a
+		/// failure and the identical repeats as Ok with `suppressed` set. The
+		/// counters live in this runtime for the current run: initialize() and
+		/// shutdown() clear them, and a successful call ends the streak, so a
+		/// suppression never survives a restart or a recovery.
+		///
+		/// Every overload updates the counters, so a failure that an
+		/// Error-returning call() already reported is suppressed by the first
+		/// ReportOnce call that repeats it: a host adopting a policy mid-run
+		/// sees `suppressed` before it has seen the error.
+		///
+		/// A call rejected before the hook runs (empty name, runtime not
+		/// initialized, a thread that does not own the interpreter) is reported
+		/// but not counted: consecutiveFailures stays zero. Such a call still
+		/// sets `stopRequested` under FailurePolicy::Stop.
+		///
+		/// \returns The error, the measured `duration`, and the failure
+		/// accounting. No report is ever fatal for a script failure, so the
+		/// host loop only stops when the host honours stopRequested.
+		[[nodiscard]] CallReport call(FailurePolicy policy,
+									  std::string_view moduleName,
+									  std::string_view functionName);
+
+		/// Like the policy-bearing call(), passing `arguments` to the hook.
+		[[nodiscard]] CallReport
+			call(FailurePolicy policy, std::string_view moduleName,
+				 std::string_view functionName,
+				 std::initializer_list<ScriptArgument> arguments);
+
+		/// \brief Like the policy-bearing call(), for an optional hook.
+		///
+		/// An absent function is a success, exactly like callOptional()'s, so
+		/// it also ends any failure streak for that name.
+		[[nodiscard]] CallReport callOptional(FailurePolicy policy,
+											  std::string_view moduleName,
+											  std::string_view functionName);
+
+		/// Like the policy-bearing callOptional(), passing `arguments`.
+		[[nodiscard]] CallReport
+			callOptional(FailurePolicy policy, std::string_view moduleName,
+						 std::string_view functionName,
+						 std::initializer_list<ScriptArgument> arguments);
 
 		/// \brief Calls `functionName` and reads its return value back as `T`.
 		///

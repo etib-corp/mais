@@ -33,6 +33,32 @@ Do not require an `IEngine` interface in the generic scripting API for a single 
 - **Deferred:** an explicit dispatch queue onto the interpreter thread. It requires a host pump point, ordered delivery, result hand-off, and a shutdown drain rule; it is tracked as MAIS-4.1 and gated on an answered Q5 in `ROADMAP.md`. The full rationale is in [THREADING.md](THREADING.md).
 - Drop Python callbacks and wrappers before interpreter finalization, and finalize the interpreter before destroying native objects they can reference.
 - C++ owns the application's main loop. Scripts execute at host-defined points; avoid giving Python an uncontrolled blocking `run()` entry point.
+- Failure policy and timing belong to the runtime, not to each consumer: the per-call
+  `FailurePolicy` and the measured `CallReport` keep the same continue/stop/report-once
+  decision out of every host. The host still owns the loop and the shutdown order, so
+  `Stop` only asks it to leave the loop; maïs never stops the interpreter on its own.
+
+## Call policy and timing surface
+
+- **Decided:** a per-call `FailurePolicy` is the final shape for the untyped
+  `call()`/`callOptional()` calls. The policy belongs at the call site because
+  only the host knows a hook's identity, how often it runs, and whether its
+  failure may end the loop; defaults leave the pre-1.0 signatures unchanged, so
+  a host that never asks for a policy adds no reporting decision to its loop.
+- **Accepted cost:** four policy-bearing overloads next to the existing eight.
+  A `CallOptions` struct was rejected for `1.0.0` because it would either change
+  every signature or duplicate them. Consolidating into `CallOptions` is the
+  fallback if the surface must grow again, and it belongs to the API-freeze
+  review (MAIS-1.9) rather than to a feature branch.
+- **Decided:** there is no `call<T>(FailurePolicy, ...)`. A value-returning call
+  is a query, not the per-frame failure path the policy exists for: `Stop` has
+  nothing to mean there, and a suppressed value has no defensible meaning.
+  Timing a value-returning call inside the runtime is a follow-up, taken only if
+  a consumer needs it; a caller can already time the typed call itself.
+- Every overload updates the per-hook counters, so the accounting describes the
+  hook and not the overload a host happened to use. `ReportOnce` can therefore
+  suppress a failure that an `Error`-returning call already reported; see
+  [ERROR_HANDLING.md](ERROR_HANDLING.md#adopting-a-policy-mid-session).
 
 ## Configuration strategy
 

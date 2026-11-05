@@ -275,3 +275,39 @@ TEST(ThreadAffinityTest, RefusesIntrospectionAndTypedCallsFromAnotherThread)
 
 	ASSERT_TRUE(runtime->shutdown().isOk());
 }
+
+/// A policy-bearing call is a Python-touching call too, so it is refused from a
+/// foreign thread before it can start a failure streak, and the owning thread
+/// still sees the real count.
+TEST(ThreadAffinityTest, RefusesPolicyCallsFromAnotherThread)
+{
+	auto runtime = std::make_shared<mais::ScriptRuntime>();
+	mais_test::FakeCounter counter("policy-affinity");
+
+	mais_test::bindFakeHost(*runtime, counter);
+	ASSERT_TRUE(runtime->addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime->initialize().isOk());
+	ASSERT_TRUE(runtime->loadModule("fake_host").isOk());
+
+	std::optional<mais::CallReport> refusal =
+		runOnForeignThread<mais::CallReport>([runtime] {
+			return runtime->call(mais::FailurePolicy::ReportOnce, "fake_host",
+								 "explode");
+		});
+	ASSERT_TRUE(refusal.has_value())
+		<< blockedMessage("call(FailurePolicy::ReportOnce)");
+
+	EXPECT_EQ(refusal->error.code(), mais::ErrorCode::WrongThread);
+	EXPECT_EQ(refusal->consecutiveFailures, 0U);
+	EXPECT_FALSE(refusal->suppressed);
+
+	// The refused call never reached the hook, so the first real failure is
+	// still the first failure of that streak.
+	mais::CallReport first =
+		runtime->call(mais::FailurePolicy::ReportOnce, "fake_host", "explode");
+	EXPECT_EQ(first.error.code(), mais::ErrorCode::InvocationFailed);
+	EXPECT_EQ(first.consecutiveFailures, 1U);
+	EXPECT_FALSE(first.suppressed);
+
+	ASSERT_TRUE(runtime->shutdown().isOk());
+}
