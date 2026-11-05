@@ -36,24 +36,28 @@ Anything else is unvalidated and therefore unsupported.
 | Platform | CI image | Python |
 | --- | --- | --- |
 | Linux | `ubuntu-24.04` | 3.9 – 3.14 |
-| macOS | `macos-latest` | 3.9 – 3.14 |
-| Windows | `windows-latest` | 3.9 – 3.14 |
+| macOS | `macos-latest` (arm64) | 3.9 – 3.14 |
+| Windows | `windows-latest` (x86_64) | 3.9 – 3.14 |
 
 `cmake/PythonSupport.cmake` is the authoritative declaration of that range. It is
 the only place the range appears in the build: configuration rejects an
 interpreter outside it, and `.github/workflows/build.yml` generates its matrix
 from the same file, so the tested versions and the accepted versions cannot
-drift apart. The table in `README.md` states the same matrix for users and must
-be updated with it.
+drift apart. The table above is the only copy outside the build — `README.md`
+sends readers here — so changing the range means editing that file and this
+table, never a third place.
 
 Extending the range:
 
 1. Add the version to `cmake/PythonSupport.cmake`.
 2. Open a pull request and let the generated matrix pass on every platform.
-3. Update the table here and in `README.md` in the same pull request.
+3. Update the table here in the same pull request.
 
-Dropping a version is a compatibility change and follows the deprecation window
-above.
+Dropping a version is a compatibility change, but it does not follow the
+deprecation window above: that window governs the API, while an interpreter
+leaves the range on its own clock, when it stops being installable on the CI
+images or reaches upstream end of life. `CHANGELOG.md` records the drop and the
+migration guide states which versions are no longer accepted.
 
 ## Communication
 
