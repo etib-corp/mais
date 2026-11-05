@@ -20,6 +20,7 @@ problem.
 | `FunctionNotFound`   | The module has no such function                              | Use `callOptional()` for hooks, or `hasFunction()` to check without invoking |
 | `TypeMismatch`       | A value could not be converted (including a native argument), the attribute is not callable, or a returned value has the wrong type | Fix the argument or the script |
 | `InvocationFailed`   | The script raised a Python exception                          | Log `traceback()`/`frames()` and continue |
+| `WrongThread`        | Called from a thread that does not own the interpreter       | Call it from the `initialize()` thread; see [THREADING.md](THREADING.md) |
 
 Helpers: `isOk`, `isRecoverable`, `isFatal`, and `errorCodeName`.
 
@@ -53,6 +54,8 @@ while (host.isRunning()) {
 
 Only `InterpreterFailure` is fatal. Every other code means the interpreter is
 still usable, so the host decides whether to retry, ignore, or stop.
+`WrongThread` in particular leaves the runtime untouched and running: the same
+call simply has to be made on the owning thread.
 
 ## Python exceptions
 

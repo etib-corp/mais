@@ -34,6 +34,9 @@ namespace mais
 	/// The taxonomy is deliberately coarse. Hosts branch on whether the
 	/// interpreter is still usable and read Error::message()/Error::traceback()
 	/// for diagnostics.
+	///
+	/// New codes are appended, never inserted: a host may log or persist the
+	/// ordinal, so the position of every existing entry is part of the ABI.
 	enum class ErrorCode {
 		/// The operation succeeded.
 		Ok = 0,
@@ -66,6 +69,11 @@ namespace mais
 		/// The script raised a Python exception; see Error::traceback()
 		/// and Error::frames().
 		InvocationFailed,
+
+		/// A thread other than the one that called initialize() tried to use
+		/// the interpreter. The runtime is unaffected; see
+		/// ScriptRuntime's threading contract.
+		WrongThread,
 	};
 
 	/// Human-readable code name, for logs and test output.

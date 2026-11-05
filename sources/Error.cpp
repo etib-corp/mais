@@ -49,6 +49,8 @@ namespace mais
 				return "TypeMismatch";
 			case ErrorCode::InvocationFailed:
 				return "InvocationFailed";
+			case ErrorCode::WrongThread:
+				return "WrongThread";
 		}
 		return "Unknown";
 	}

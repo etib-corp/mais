@@ -11,6 +11,7 @@ set(TEST_SOURCES
     sources/test_error.cpp
     sources/test_lifecycle.cpp
     sources/test_script_runtime.cpp
+    sources/test_thread_affinity.cpp
 )
 
 # Fetch GoogleTest
