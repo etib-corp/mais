@@ -1226,6 +1226,8 @@ TEST(CallPolicyTest, ReportsIdenticalRepeatsOnlyOnce)
 		EXPECT_TRUE(repeat.isOk());
 		EXPECT_TRUE(repeat.suppressed);
 		EXPECT_EQ(repeat.consecutiveFailures, attempt);
+		// A suppressed repeat still ran the hook, so it is still measured.
+		EXPECT_GT(repeat.duration.count(), 0);
 	}
 
 	// A changed message is a different failure of the same hook, so it is
@@ -1331,6 +1333,14 @@ TEST(CallPolicyTest, StopPolicyMarksTheReportWithoutStoppingTheRuntime)
 	ASSERT_TRUE(runtime.initialize().isOk());
 	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
 	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
+
+	// A successful call never asks for a stop, even under Stop.
+	mais::CallReport succeeded =
+		runtime.call(mais::FailurePolicy::Stop, "fake_host", "label");
+	ASSERT_TRUE(succeeded.isOk()) << succeeded.error.toString();
+	EXPECT_FALSE(succeeded.stopRequested);
+	EXPECT_FALSE(succeeded.suppressed);
+	EXPECT_EQ(succeeded.consecutiveFailures, 0U);
 
 	mais::CallReport report =
 		runtime.call(mais::FailurePolicy::Stop, "fake_host", "explode");

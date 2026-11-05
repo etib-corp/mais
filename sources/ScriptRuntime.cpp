@@ -322,8 +322,12 @@ namespace mais
 
 		/// \brief Key of the per-hook failure counters.
 		///
-		/// A unit separator cannot appear in a Python identifier, so the pair
-		/// cannot collide with another module/function combination.
+		/// The unit separator keeps the usual pair unambiguous. It is not a
+		/// guarantee: names are validated as non-empty, not as Python
+		/// identifiers, so a name that itself contains the separator can
+		/// collide with another pair. The damage is bounded — such a name
+		/// cannot resolve to a Python module or attribute, so the calls whose
+		/// streaks get merged fail either way.
 		std::string hookKey(std::string_view moduleName,
 							std::string_view functionName)
 		{
