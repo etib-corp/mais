@@ -124,7 +124,7 @@ The adapter, the UI widgets, and engine configuration, all of which belong to
 
 - [ ] A frame-loop host example exercises configure, start, per-frame update,
       and shutdown, with a validated settings facade.
-- [ ] The adapter pattern and the hook-schedule contract are documented, so a
+- [x] The adapter pattern and the hook-schedule contract are documented, so a
       consumer knows what to implement and where hooks run.
 - [ ] Script packaging (development versus shipped layout) is documented.
 
