@@ -4,3 +4,4 @@
 # its own loop. Built only when BUILD_EXAMPLES is enabled at the top level.
 
 add_subdirectory(standalone_host)
+add_subdirectory(frame_loop_host)
