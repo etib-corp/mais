@@ -105,13 +105,27 @@ console.timing("on_update", report.duration);
 `ReportOnce` suppresses an identical repeated failure, `Stop` asks the host to
 leave its loop, and `Continue` keeps 1.0.0's report-every-failure behaviour.
 
+## Supported platforms
+
+maïs is built and tested on Linux, macOS, and Windows, on every Python version
+in its supported range, and only those combinations. Anything else is
+unvalidated, so `cmake` configuration rejects an interpreter outside the range
+with a message naming it instead of failing later inside pybind11.
+
+[`docs/VERSIONING.md`](docs/VERSIONING.md#platform--toolchain-support) holds the
+matrix and the policy for changing it.
+[`cmake/PythonSupport.cmake`](cmake/PythonSupport.cmake) is the single
+declaration behind both: configuration refuses anything outside the range and
+the CI matrix is generated from it, so the workflow and `configure` cannot
+disagree.
+
 ## Building
 
 Requirements are CMake 3.20 or newer, a C++20 compiler, and a Python
-installation with development files — headers and the embeddable library, which
-is `python3-dev` on Debian and Ubuntu. pybind11 is fetched automatically when it
-is not already installed. No Vulkan SDK, OpenXR, GLFW, or engine-specific
-platform selection is required.
+installation within the supported range, with development files — headers and
+the embeddable library, which is `python3-dev` on Debian and Ubuntu. pybind11 is
+fetched automatically when it is not already installed. No Vulkan SDK, OpenXR,
+GLFW, or engine-specific platform selection is required.
 
 ```sh
 cmake -S . -B build \

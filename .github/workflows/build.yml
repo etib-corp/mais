@@ -7,8 +7,6 @@ on:
     branches: [ "main" ]
 
 env:
-  # Pinned so CI, the examples, and a developer machine agree on one version.
-  PYTHON_VERSION: "3.13"
   # Multi-config generators (Visual Studio on Windows) ignore CMAKE_BUILD_TYPE.
   # One value is threaded through configure, build, and CTest so all three
   # agree; on single-config generators (Makefiles/Ninja) it is ignored where it
@@ -16,34 +14,64 @@ env:
   BUILD_CONFIG: "Release"
 
 jobs:
-  build:
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Linux
-            operating-system: linux
-            runner: ubuntu-latest
-          - name: macOS
-            operating-system: macos
-            runner: macos-latest
-          - name: Windows
-            operating-system: windows
-            runner: windows-latest
+  support-matrix:
+    name: Resolve the support matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      versions: ${{ steps.resolve.outputs.versions }}
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v6.0.2
 
-      - name: Install Linux dependencies
-        if: matrix.operating-system == 'linux'
+      - name: Read the supported Python versions
+        # cmake/PythonSupport.cmake declares the supported range once and is
+        # what configure enforces. The build matrix is generated from it, so
+        # the versions CI tests and the versions CMake accepts cannot drift
+        # apart, and the list is not repeated per job.
+        id: resolve
+        run: |
+          set -euo pipefail
+          cmake -DMAIS_PYTHON_MATRIX_OUT="$RUNNER_TEMP/versions.json" \
+            -P cmake/PythonSupport.cmake
+          versions="$(cat "$RUNNER_TEMP/versions.json")"
+          if [ "${versions}" = "[]" ]; then
+            echo "::error::cmake/PythonSupport.cmake declared no versions."
+            exit 1
+          fi
+          echo "Supported Python versions: ${versions}"
+          echo "versions=${versions}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    needs: support-matrix
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every supported Python version, on every supported platform. Only
+        # add a version to the axis above by adding it to
+        # cmake/PythonSupport.cmake; it then has to pass here on all three
+        # platforms before it can be called supported.
+        python: ${{ fromJSON(needs.support-matrix.outputs.versions) }}
+        os: [ ubuntu-24.04, macos-latest, windows-latest ]
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Install Linux build dependencies
+        # The interpreter comes from actions/setup-python below, the same
+        # source macOS and Windows use. Installing the distro python3-dev here
+        # as well once left discovery resolving the interpreter and the linked
+        # library to two different installations.
+        if: matrix.os == 'ubuntu-24.04'
+        env:
+          MAIS_INSTALL_PYTHON_DEV: "0"
         run: bash scripts/install_ubuntu_dependencies.sh
 
       - name: Set up Python
-        if: matrix.operating-system != 'linux'
         uses: actions/setup-python@v6.0.0
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: ${{ matrix.python }}
 
       - name: Configure CMake
         # pybind11 owns Python discovery and finds the interpreter first on

@@ -87,7 +87,7 @@ straight to a hook and read values back.
 | MAIS-1.5 | **Structured diagnostics.** Traceback frames as data — file, line, function — not only formatted text. | A console can only jump to source if it gets frames, not a string. | Next |
 | MAIS-1.6 | **Explicit module lifecycle.** `reloadModule()`, `unloadModule()`, and documented re-import semantics. | Precursor to M3; also lets a host disable a bad script at runtime. | Later |
 | MAIS-1.7 | **Decide and document the GIL/threading model.** Either the current "hold the GIL on the initializing thread" or a release/attach mode. | `evan` may want scripts callable from a render or worker thread. Decide before M2 hardens. | Done: [THREADING.md](THREADING.md) keeps the current model and refuses cross-thread calls with `WrongThread`. |
-| MAIS-1.8 | **Support matrix.** CI across Python 3.11–3.13 and all three desktop OSes; state the floor and ceiling. | First-class Windows support is currently unverified on real hardware. | Next |
+| MAIS-1.8 | **Support matrix.** CI across the declared Python range on all three desktop OSes; state the floor and ceiling. | A consumer has to know which interpreter it may embed before it designs around one. | Done: Python 3.9 – 3.14 on Linux, macOS, and Windows. [PythonSupport.cmake](../cmake/PythonSupport.cmake) declares the range, configure rejects anything outside it, and the CI matrix is generated from it — see [VERSIONING.md](VERSIONING.md#platform--toolchain-support). |
 | MAIS-1.9 | **API freeze review** and complete API-reference coverage before `1.0.0` is tagged. | Consumers should not build on a moving surface. | Later |
 
 **Exit criteria:** a host can pass a native facade to a hook, read a typed result
@@ -167,7 +167,7 @@ consumer's behalf.
 | Q3 | Hot reload scope: module re-import, subinterpreter per script, or process swap? | M3 | maintainers |
 | Q4 | Are scripts first-party only, or user-authored? | MAIS-4.4 | product |
 | Q5 | Must scripts ever run off the main thread? | MAIS-4.1 (MAIS-1.7 keeps the single-thread model until this is answered) | evan + guillaume |
-| Q6 | Python floor and ceiling; is Windows first-class? | MAIS-1.8 | maintainers |
+| Q6 | Python floor and ceiling; is Windows first-class? | MAIS-1.8 answered it: 3.9 – 3.14, Windows first-class and in the matrix | maintainers |
 | Q7 | Is there a sponsor for a second scripting language? | MAIS-5.1 | maintainers |
 | Q8 | One runtime per process forever, or eventually several? | MAIS-4.5 | maintainers |
 

@@ -96,7 +96,7 @@ interpretation, UI widgets, and anything owned by `guillaume`.
       attributable to that hook.
 - [ ] A consumer can address an individual traceback frame.
 - [x] The GIL/threading model is written down and matches the implementation.
-- [ ] CI builds and tests on the supported Python versions and all three
+- [x] CI builds and tests on the supported Python versions and all three
       desktop OSes.
 - [ ] The dependency boundary is enforced by a check, not only by review.
 
