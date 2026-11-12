@@ -218,4 +218,6 @@ See [AGENTS.md](AGENTS.md) for repository development guidance and [TECHNICAL_CH
 - [docs/MILESTONES.md](docs/MILESTONES.md) — the ordered increments and their exit criteria.
 - [docs/issues/](docs/issues/) — the work items, one file per issue.
 - [examples/standalone_host](examples/standalone_host) — a complete host.
+- [examples/frame_loop_host](examples/frame_loop_host) — a validated settings
+  facade, native frame context, and fixed-step loop.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — how to take part, and [LICENSE](LICENSE) for terms.

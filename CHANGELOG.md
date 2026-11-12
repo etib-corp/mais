@@ -72,6 +72,11 @@ as part of this scripting library. 1.0.0 is the first release of this runtime.
   working afterwards, and ownership follows each `initialize()`.
 - `examples/standalone_host`, a complete host with no engine, no UI, and no
   dependency on `guillaume` or `evan`. CTest runs it as an integration test.
+- `examples/frame_loop_host`, the worked M2 integration pattern: a settings
+  facade the script writes to and the host validates before starting its engine
+  stub, a native per-frame context, a bounded fixed timestep, per-hook
+  `FailurePolicy` choices, and a shutdown summary. CTest runs both its normal
+  scenario and one whose settings proposal is rejected.
 - A benchmark harness (`BUILD_BENCHMARKS`) measuring per-call overhead,
   including a full round trip where Python calls back into a host binding.
 - Install/export rules so an external project can `find_package(mais)` and link

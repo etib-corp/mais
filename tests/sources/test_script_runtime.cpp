@@ -1423,12 +1423,20 @@ TEST(CallPolicyTest, MeasuresTheDurationOfTheCall)
 	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
 	ASSERT_TRUE(runtime.loadModule("fake_host").isOk());
 
+	// time.sleep() is only as precise as the platform's timer: Windows keeps
+	// its wait timers on the system tick, so a sleep can finish up to a tick
+	// early (CI measured 9.68 ms for a 10 ms request). Sleep well above the
+	// tick and require a duration that is still far above a no-op call, which
+	// keeps the check meaningful without depending on the exact interval.
+	constexpr auto requestedSleep = std::chrono::milliseconds(100);
+	constexpr auto toleratedSlack = std::chrono::milliseconds(50);
+
 	mais::CallReport slept =
 		runtime.call(mais::FailurePolicy::Continue, "fake_host", "sleep_ms",
-					 { mais::ScriptArgument::integer(10) });
+					 { mais::ScriptArgument::integer(requestedSleep.count()) });
 
 	ASSERT_TRUE(slept.isOk()) << slept.error.toString();
-	EXPECT_GE(slept.duration, std::chrono::milliseconds(10));
+	EXPECT_GE(slept.duration, requestedSleep - toleratedSlack);
 
 	mais::CallReport failed =
 		runtime.call(mais::FailurePolicy::Continue, "fake_host", "explode");
