@@ -109,10 +109,13 @@ def on_update(delta_seconds):
     host.clock.delta_seconds = delta_seconds
 ```
 
-Arguments are scalars only (`int`, `float`, `bool`, `str`) in this version, so a
-hook that needs a native object reads it from the host module instead of
-receiving it as a parameter. The same four types can be read back from a call;
-see [section 7](#7-read-a-value-back).
+Arguments are scalars (`int`, `float`, `bool`, `str`) or a host-owned object
+passed with `mais::ScriptArgument::native()`, whose converter the host's adapter
+supplies. A hook can also read a native object from the host module instead of
+receiving it as a parameter, as this example does. The same four scalar types
+can be read back from a call; see [section 7](#7-read-a-value-back).
+[HOST_INTEGRATION.md](HOST_INTEGRATION.md) works through the object form, its
+lifetime rule, and where the converter runs.
 
 ### Keep every script call on one thread
 
@@ -232,6 +235,8 @@ stopped at all.
 ## Next steps
 
 - [THREADING.md](THREADING.md) for the thread and GIL contract.
+- [HOST_INTEGRATION.md](HOST_INTEGRATION.md) for the adapter pattern and the
+  per-frame hook schedule a real consumer needs.
 - [ERROR_HANDLING.md](ERROR_HANDLING.md) for the error taxonomy and tracebacks.
 - [ARCHITECTURE.md](ARCHITECTURE.md) for the ownership and dependency rules.
 - `examples/standalone_host/` for the complete runnable host.

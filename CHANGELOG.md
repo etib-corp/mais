@@ -60,6 +60,12 @@ as part of this scripting library. 1.0.0 is the first release of this runtime.
   which thread owns the GIL, what the host must guarantee, what a violation
   returns, the rejected "release the GIL between calls" option, and the
   dispatch-queue design MAIS-4.1 starts from.
+- `docs/HOST_INTEGRATION.md`, the concrete recipe behind the ownership rules in
+  `docs/ARCHITECTURE.md`: which parts belong to the adapter and which to the
+  host, the narrow facade a consumer exposes to scripts and what must never
+  cross that boundary, the validate-then-apply flow for script-proposed engine
+  configuration, and the per-frame hook schedule of a frame-driven XR host,
+  with the ordering and the frame-pacing constraints that make it matter.
 - A compile-only target proving every public header builds without pybind11 or
   `Python.h`.
 - A standalone fake-host acceptance test: the host injects a C++ service,

@@ -129,16 +129,22 @@ one that started it.
 The names `configure`, `on_start`, `on_update`, and `on_shutdown` are example
 host-defined hooks, not a promise that they already exist. The exact position
 of `on_update` relative to engine updates and rendering must be specified by
-each consumer. Script errors reach the host with traceback context and a
-per-call `FailurePolicy` (`Continue`, `Stop`, `ReportOnce`), so continuing or
-stopping is one decision the host makes instead of an `if` around every call;
-see [ERROR_HANDLING.md](ERROR_HANDLING.md#call-policy-and-timing).
+each consumer; the schedule `guillaume` uses, and the frame-pacing constraints
+behind it, are in [HOST_INTEGRATION.md](HOST_INTEGRATION.md). Script errors
+reach the host with traceback context and a per-call `FailurePolicy`
+(`Continue`, `Stop`, `ReportOnce`), so continuing or stopping is one decision
+the host makes instead of an `if` around every call; see
+[ERROR_HANDLING.md](ERROR_HANDLING.md#call-policy-and-timing).
 
 ## Engine integration
 
 `evan` should provide native configuration at the appropriate point in its lifecycle. The optional adapter translates a restricted subset of that API into Python-visible settings or commands. The host validates configuration before engine initialization and retains ownership of the loop. Runtime changes, if supported later, need separate thread and lifecycle rules.
 
 The adapter can live alongside `guillaume` at first. If extracted into `evan-scripting`, its allowed dependency direction is `evan-scripting → maïs + evan`; neither maïs nor evan links back to it.
+
+[HOST_INTEGRATION.md](HOST_INTEGRATION.md) is the concrete recipe: the facade an
+adapter exposes and what must never cross the boundary, the validate-then-apply
+startup flow, and the hook schedule a frame-driven XR host calls.
 
 ## UI boundary
 

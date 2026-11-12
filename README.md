@@ -207,12 +207,17 @@ pybind11==2.13.6` also provides. Note that `pip install pybind11` now installs
 
 UI components such as a script console and engine settings panel belong to the application UI. maïs only supplies generic scripting diagnostics and invocation facilities.
 
+The recipe a `guillaume` implementer follows — the adapter facade, what must
+never cross the boundary, the validate-then-apply startup flow, and where
+`on_update` sits in an XR frame — is [docs/HOST_INTEGRATION.md](docs/HOST_INTEGRATION.md).
+
 ## Documentation and contributions
 
 See [AGENTS.md](AGENTS.md) for repository development guidance and [TECHNICAL_CHOICES.md](docs/TECHNICAL_CHOICES.md) for recorded architectural decisions. Additional reading:
 
 - [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — build a host step by step.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — ownership and dependency rules.
+- [docs/HOST_INTEGRATION.md](docs/HOST_INTEGRATION.md) — the adapter pattern, the validate-then-apply startup flow, and the per-frame hook schedule.
 - [docs/ERROR_HANDLING.md](docs/ERROR_HANDLING.md) — error taxonomy and tracebacks.
 - [docs/ROADMAP.md](docs/ROADMAP.md) — strategy, owners, and open questions.
 - [docs/MILESTONES.md](docs/MILESTONES.md) — the ordered increments and their exit criteria.
