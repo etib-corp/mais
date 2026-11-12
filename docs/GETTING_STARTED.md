@@ -73,6 +73,13 @@ if (mais::Error error = runtime.loadModule("game"); error) {
 `addSearchPath` accepts only an existing directory, so a typo fails immediately
 instead of turning into a confusing import error later.
 
+Where those directories belong — the source tree while developing, application
+resources in a packaged build, and how to locate either at runtime on macOS,
+Linux, and Windows — is covered in
+[SCRIPT_PACKAGING.md](SCRIPT_PACKAGING.md), along with the resolution order that
+decides which directory wins when two of them provide a module with the same
+name, and the `ErrorCode` a missing directory or module reports.
+
 ## 4. Call hooks from the host's loop
 
 The host owns the loop and chooses where scripts run. `callOptional` treats a

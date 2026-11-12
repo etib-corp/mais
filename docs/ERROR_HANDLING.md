@@ -24,6 +24,10 @@ problem.
 
 Helpers: `isOk`, `isRecoverable`, `isFatal`, and `errorCodeName`.
 
+A missing script directory and a missing module both reach the host as a code
+from this table; [SCRIPT_PACKAGING.md](SCRIPT_PACKAGING.md#failure-modes) maps
+each search-path and import failure to its code.
+
 ## Consumer contract
 
 Every fallible method returns `mais::Error`:
