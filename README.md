@@ -214,6 +214,7 @@ See [AGENTS.md](AGENTS.md) for repository development guidance and [TECHNICAL_CH
 - [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — build a host step by step.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — ownership and dependency rules.
 - [docs/ERROR_HANDLING.md](docs/ERROR_HANDLING.md) — error taxonomy and tracebacks.
+- [docs/SCRIPT_PACKAGING.md](docs/SCRIPT_PACKAGING.md) — where scripts live, and how the runtime finds them.
 - [docs/ROADMAP.md](docs/ROADMAP.md) — strategy, owners, and open questions.
 - [docs/MILESTONES.md](docs/MILESTONES.md) — the ordered increments and their exit criteria.
 - [docs/issues/](docs/issues/) — the work items, one file per issue.
