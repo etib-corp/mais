@@ -340,15 +340,39 @@ namespace mais
 		// -- Script loading --------------------------------------------------
 
 		/// \brief Adds a directory that loadModule() searches for imports.
-		/// \returns ScriptNotFound when `path` is not an existing directory;
-		/// WrongThread when the path would touch Python from a thread that
-		/// does not own the interpreter.
+		///
+		/// Search order
+		/// ------------
+		/// Paths are searched in the order they were added: when two of them
+		/// contain a module with the same name, the first path added wins.
+		/// The configured paths form one leading block in `sys.path`, ahead of
+		/// the interpreter's own entries, so a script directory can shadow a
+		/// standard-library module. A path added while the runtime is running
+		/// is inserted after the paths already configured, never in front of
+		/// them. See docs/SCRIPT_PACKAGING.md for the full contract.
+		///
+		/// The string is compared literally against the paths already
+		/// recorded, so repeating one is a no-op that returns Ok, while two
+		/// spellings of the same directory are recorded twice. Pass an
+		/// absolute path: a relative one resolves against the process's
+		/// working directory at import time.
+		///
+		/// \returns ScriptNotFound when `path` is not an existing directory,
+		/// in which case nothing is recorded; WrongThread when the path would
+		/// touch Python from a thread that does not own the interpreter.
 		Error addSearchPath(const std::string &path);
 
-		/// Search paths configured so far, in insertion order.
+		/// \brief Search paths configured so far, in search order.
+		///
+		/// The first entry wins when two of them contain the same module name.
 		[[nodiscard]] std::vector<std::string> searchPaths() const;
 
-		/// Imports `moduleName` using the configured search paths.
+		/// \brief Imports `moduleName` using the configured search paths.
+		///
+		/// The first configured path that provides the name wins, but only
+		/// once per run: an already imported module, including one registered
+		/// by registerModule(), is returned from `sys.modules` whatever the
+		/// search paths say.
 		/// \returns NotInitialized, InvalidArgument, ModuleNotFound,
 		/// WrongThread, or InvocationFailed when the module raises while
 		/// importing.
