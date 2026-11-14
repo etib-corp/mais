@@ -133,3 +133,32 @@ These commands are a baseline, not a claim that the current repository already c
 2. Improve error reporting so a failed Python callback returns a traceback to the host.
 3. Add an optional standalone example that uses maïs without `evan` or `guillaume`.
 4. Document the binding registration timing and object-lifetime contract.
+
+## Agent tooling
+
+`AGENTS.md` is the single source of instructions. Skills and subagents live
+under `.agents/`; Claude Code reads them through symlinks, so there is one
+copy of everything:
+
+```text
+AGENTS.md
+CLAUDE.md        -> AGENTS.md
+.agents/skills/  one directory per skill, each with a SKILL.md
+.agents/agents/  one Markdown file per subagent
+.claude/skills   -> ../.agents/skills
+.claude/agents   -> ../.agents/agents
+```
+
+Edit the files under `.agents/`, never through `.claude/`. On Windows, clone
+with `git config core.symlinks true` so the links are created.
+
+| Skill | Use it to |
+| --- | --- |
+| `build-and-test` | Configure with a chosen Python, build, test, format. |
+| `check-boundaries` | Run and understand the dependency gate. |
+| `add-source-file` | Add a source, test, test script or example host. |
+
+| Subagent | Use it to |
+| --- | --- |
+| `build-verifier` | Build, test and run the gate, and get a short report. |
+| `boundary-reviewer` | Check a change against the architecture rules. |
