@@ -54,7 +54,7 @@ Verified by a clean configure, build, and test run:
 | **M0** | Generic runtime that a host can embed | maïs | Done |
 | **M1** | Invocation surface rich enough for a real XR/UI host | maïs | Next |
 | **M2** | Wire the runtime into the XR/UI application | guillaume + adapter | Next |
-| **M3** | Fast iteration: reload scripts without restarting the headset app | maïs, design-first | Later |
+| **M3** | Fast iteration: reload scripts without restarting the headset app | maïs, design-first | Later (design done) |
 | **M4** | Survive long XR sessions: threads, memory, failure policy, trust | maïs | Later |
 | **M5** | Breadth, only if a second real consumer justifies it | maïs | Conditional |
 
@@ -85,7 +85,7 @@ straight to a hook and read values back.
 | MAIS-1.3 | **Hook introspection.** `hasFunction()` and a function listing, without invoking. | The console and settings panel list the hooks a script implements; avoids double-invoking optional hooks. | Next |
 | MAIS-1.4 | **Per-hook call policy.** Continue/stop, warn-once, and per-hook timing. | One broken `on_update` must not kill a running session; the UI shows which hook is slow. | Done: `FailurePolicy`/`CallReport`, see [ERROR_HANDLING.md](ERROR_HANDLING.md#call-policy-and-timing). |
 | MAIS-1.5 | **Structured diagnostics.** Traceback frames as data — file, line, function — not only formatted text. | A console can only jump to source if it gets frames, not a string. | Next |
-| MAIS-1.6 | **Explicit module lifecycle.** `reloadModule()`, `unloadModule()`, and documented re-import semantics. | Precursor to M3; also lets a host disable a bad script at runtime. | Later |
+| MAIS-1.6 | **Explicit module lifecycle.** `reloadModule()`, `unloadModule()`, and documented re-import semantics. | **Moved to M3 (MAIS-3.2):** the reload design fixed the semantics and the failure states, so implementing the lifecycle before it would have been rework. | Moved |
 | MAIS-1.7 | **Decide and document the GIL/threading model.** Either the current "hold the GIL on the initializing thread" or a release/attach mode. | `evan` may want scripts callable from a render or worker thread. Decide before M2 hardens. | Done: [THREADING.md](THREADING.md) keeps the current model and refuses cross-thread calls with `WrongThread`. |
 | MAIS-1.8 | **Support matrix.** CI across the declared Python range on all three desktop OSes; state the floor and ceiling. | A consumer has to know which interpreter it may embed before it designs around one. | Done: Python 3.9 – 3.14 on Linux, macOS, and Windows. [PythonSupport.cmake](../cmake/PythonSupport.cmake) declares the range, configure rejects anything outside it, and the CI matrix is generated from it — see [VERSIONING.md](VERSIONING.md#platform--toolchain-support). |
 | MAIS-1.9 | **API freeze review** and complete API-reference coverage before `1.0.0` is tagged. | Consumers should not build on a moving surface. | Later |
@@ -115,19 +115,25 @@ application console — with maïs unchanged except as M1 requires.
 
 ## M3 — Iteration and hot reload
 
-*Design before code.* `TECHNICAL_CHOICES.md` lists hot reload as a deferred
-decision requiring explicit requirements, tests, and ownership rules.
+*Design before code.* [HOT_RELOAD.md](HOT_RELOAD.md) is the design record:
+granularity, what a reload re-executes, the lifetime of the previous generation,
+native bindings and host objects, failure states, opt-in state migration,
+observability, the frame budget, the test plan, and the API additions that need
+approval before implementation. MAIS-3.1 is done; MAIS-3.2 to MAIS-3.4 are
+blocked on that approval.
 
 | ID | Item | Notes | Status |
 | --- | --- | --- | --- |
-| MAIS-3.1 | Design document: requirements, ownership, failure modes, what state may be migrated. | Gate for everything below. | Later |
-| MAIS-3.2 | Change detection and reload that does not stall a frame; budgeted, observable. | Iterating on an XR app should not mean a headset restart. | Later |
-| MAIS-3.3 | State migration contract: explicit, opt-in, schema-checked. | Silent state loss is worse than no reload. | Later |
-| MAIS-3.4 | Reference invalidation: old module objects are released before re-execution; no dangling native wrappers. | Interacts with the lifetime contract. | Later |
+| MAIS-3.1 | **Design document**: requirements, ownership, failure modes, what state may be migrated. | Done: [HOT_RELOAD.md](HOT_RELOAD.md). Gate for everything below. | Done |
+| MAIS-3.2 | **Explicit, transactional module lifecycle.** `reloadModule()` and `unloadModule()`, generation tracking, atomic commit and rollback, and retirement of the previous generation with no dangling native wrappers. Absorbs MAIS-1.6 and the former reference-invalidation item. | Iterating on an XR app should not mean a headset restart. A failed edit must leave the previous generation current. | Blocked: API approval |
+| MAIS-3.3 | **Change detection and a measured apply.** `pollModuleChanges()` over source-backed loaded modules; the host applies at a safe point and reads the duration from the reload report. No watcher thread, no preemption. | Detection is a cheap poll; the reload itself is the frame cost, and the host owns the budget. | Blocked: API approval |
+| MAIS-3.4 | **Opt-in state migration.** Host-named export/import hooks, an opaque text payload, script-side schema validation, and rollback when the import hook refuses. | Silent state loss is worse than no reload. | Blocked: API approval |
 
 **Exit criteria:** a script can be edited and reloaded mid-session, repeatedly,
-without leaks, without invalidating host objects, and without dropping frames
-beyond the documented budget.
+without reference accumulation, without invalidating host objects, and without a
+reload stalling a frame beyond the cost the host measured and chose to accept.
+Any failure leaves the previous generation current and callable. State migrates
+only when a script declares it and validates its own schema.
 
 ## M4 — Long-session robustness
 
@@ -164,7 +170,7 @@ consumer's behalf.
 | --- | --- | --- | --- |
 | Q1 | Does `guillaume` need native objects passed to hooks, or is `import host` sufficient? | MAIS-1.1 priority | guillaume |
 | Q2 | Which UI toolkit hosts the console and settings panel? | HOST-2.4, HOST-2.5 | guillaume |
-| Q3 | Hot reload scope: module re-import, subinterpreter per script, or process swap? | M3 | maintainers |
+| Q3 | Hot reload scope: module re-import, subinterpreter per script, or process swap? | M3 answered it in [HOT_RELOAD.md](HOT_RELOAD.md): whole-module generation replacement, one module at a time, on the owning thread; `importlib.reload()`, subinterpreters and process swap were rejected. | maintainers |
 | Q4 | Are scripts first-party only, or user-authored? | MAIS-4.4 | product |
 | Q5 | Must scripts ever run off the main thread? | MAIS-4.1 (MAIS-1.7 keeps the single-thread model until this is answered) | evan + guillaume |
 | Q6 | Python floor and ceiling; is Windows first-class? | MAIS-1.8 answered it: 3.9 – 3.14, Windows first-class and in the matrix | maintainers |

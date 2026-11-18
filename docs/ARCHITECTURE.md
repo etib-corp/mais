@@ -90,6 +90,26 @@ hooks where its frame loop says, on the scripting owner's thread. If scripting
 must later move off that thread, the adapter needs a handoff design; grabbing the
 GIL from the render thread is exactly the unsupported mode.
 
+## Module lifecycle and reload
+
+`ScriptRuntime` owns the set of modules it has loaded. `loadModule()` imports a
+source-backed script module, `reloadModule()` re-executes that module's captured
+source as a new generation, and `unloadModule()` releases it. Modules created by
+`registerModule()` are host bindings, not script modules: they are part of the
+interpreter, are never reloaded, and keep their pybind11 type registrations for
+the interpreter's lifetime.
+
+A reload is transactional and runs at a point the host chooses, on the thread
+that owns the interpreter. maïs never watches files and never reloads on a
+schedule of its own. Any failure leaves the previous generation current; a
+successful reload commits the new generation and releases the previous one.
+Host-owned native objects outlive a reload by the same rule that makes them
+outlive a call: they must outlive the runtime.
+
+The guarantees, the failure states, the opt-in state-migration contract, the
+frame budget, and the API proposed for M3 are in
+[HOT_RELOAD.md](HOT_RELOAD.md).
+
 ## Application lifecycle
 
 The application, not Python, controls startup and the frame loop:
