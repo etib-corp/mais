@@ -1,8 +1,9 @@
 # Hot reload and state migration
 
-**Status:** proposed for maintainer review (M3, MAIS-3.1). Nothing in this
-document is implemented. The API additions in
-[Proposed API](#proposed-api-for-approval) need approval before MAIS-3.2 starts.
+**Status:** proposed for maintainer review (M3, MAIS-3.1). The questions below
+are answered; the API additions in
+[Proposed API](#proposed-api-for-approval) still need approval before MAIS-3.2
+starts. Nothing in this document is implemented.
 
 **Applies to:** `mais::ScriptRuntime`, and the frame contract a consumer
 follows in [HOST_INTEGRATION.md](HOST_INTEGRATION.md).
@@ -13,21 +14,23 @@ receive explicit requirements, tests, and ownership rules before it is
 implemented, and because an unspecified reload is worse than none: it silently
 loses state.
 
-## The question
+## The questions, and their answers
 
 Iterating on an XR application currently means restarting the headset app, which
-is the slowest feedback loop in the project. What does "reload a script"
-mean precisely enough to build and test?
+is the slowest feedback loop in the project. "Reload a script" has to mean
+something precise enough to build and test, so the questions below are answered
+here and elaborated in the linked sections.
 
-- What is re-executed, and what is left alone?
-- What happens to Python objects that still refer to the old code?
-- How do native wrappers and host-owned objects stay valid?
-- What state may cross the reload, who declares it, and what is refused?
-- What is the runtime state after a syntax error, a missing hook, or an
-  exception during execution?
-- What can the host observe, and what does a reload cost?
-- What happens when a reload does not fit an XR frame?
-- Which API additions does this imply, and which are deliberately not made?
+| Question | Answer | Elaborated in |
+| --- | --- | --- |
+| What is re-executed, and what is left alone? | The module body. Its dependencies are reloaded only if the host reloads them explicitly, and bindings are never reloaded. | [What a reload executes](#what-a-reload-executes) |
+| What happens to Python objects that still refer to the old code? | They remain valid, but they are stale. A reload produces a new module object, and the old one is released only after the new one commits. | [The previous generation after a reload](#the-previous-generation-after-a-reload) |
+| How do native wrappers and host-owned objects stay valid? | The runtime never touches them. A wrapper that the old module returned still refers to the same host object after a reload, and the host must not destroy that object while a wrapper may still exist. | [Native bindings and host objects](#native-bindings-and-host-objects) |
+| What state may cross the reload, who declares it, and what is refused? | If it can cross the reload, it is text. The host names two hooks, one to export state from the old generation and one to import it into the new generation. The script validates its own schema and raises to refuse; the runtime does not parse or mutate the payload. | [State migration](#state-migration) |
+| What is the runtime state after a syntax error, a missing hook, or an exception during execution? | The previous generation is current and callable. The new generation is discarded, and the runtime restores `sys.modules` to point at the old module. | [Failure modes](#failure-modes) |
+| What can the host observe, and what does a reload cost? | A `ReloadReport` carries the phase reached, the total duration, the compile, execute and state durations, the generation that is live when the call returns, and a recoverable `Error` with a traceback if the reload failed. | [Observability and cost](#observability-and-cost) |
+| What happens when a reload does not fit an XR frame? | The runtime reports the duration; it does not enforce a budget and does not spread a reload across frames. The host decides whether to block, skip, or break the frame. | [Frame budget](#frame-budget) |
+| Which API additions does this imply, and which are deliberately not made? | See [Proposed API](#proposed-api-for-approval) for the additions. The runtime does not watch files, does not reload on its own schedule, does not reload from a thread other than the one that called `initialize()`, and does not re-invoke hooks automatically. | [Proposed API for approval](#proposed-api-for-approval) |
 
 Current behaviour is the starting point: `loadModule()` calls
 `py::module_::import()`, which returns the cached `sys.modules` entry on a second
@@ -558,13 +561,18 @@ swallowed by script code. So the call runs to completion or to its own failure,
 the frame is late by the overrun, and the compositor reprojects the last
 submitted frame.
 
-A host that wants a hard budget enforces it as policy:
+Because the runtime cannot stop a reload mid-flight, the budget is the host's
+policy, and it has three responses:
 
-- only auto-apply a detected change when the previous reload's `duration` was
-  under the share;
-- otherwise require an explicit pause or key press to reload;
-- raise the detection interval (every 10–30 frames is a typical starting point);
-- keep module-level work small and move one-time setup into `on_start`.
+- **Block.** Apply in the gap and accept that the frame is late by the overrun;
+  the compositor reprojects the last submitted frame.
+- **Skip.** Keep the change pending and apply it later: only auto-apply when the
+  previous reload's `duration` was under the share, otherwise wait for a pause
+  or an explicit key press, and raise the detection interval (every 10–30 frames
+  is a typical starting point).
+- **Break the frame deliberately.** Spend the budget on the reload, log the
+  overrun from `duration`, and reduce the chance of a repeat by keeping
+  module-level work small and moving one-time setup into `on_start`.
 
 `pollModuleChanges()` costs one `stat` per source-backed loaded module and
 returns a de-duplicated list, so saving several files between two polls produces
