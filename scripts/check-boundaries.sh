@@ -117,14 +117,19 @@ verify() {
     # Configuring maïs from a consumer is the case a library-subdirectory
     # configure can get wrong, so both probes are real consumers.
     cat > "$probe_root/prelude.cmake" <<EOF
-cmake_minimum_required(VERSION 3.20)
 project(boundary_consumer LANGUAGES CXX)
 add_subdirectory("$repo_root" mais)
 EOF
 
     echo "== verify: a dependency pushed into the target is rejected =="
     mkdir -p "$probe_root/direct"
+    # cmake_minimum_required has to be in the CMakeLists.txt itself. CMake 4.4
+    # stopped applying the policy version set inside an included file to the
+    # including directory, which left CMP0079 at OLD and made the probe fail
+    # for the wrong reason: CMake refused the cross-directory target_link_libraries
+    # before the boundary check ever ran.
     cat > "$probe_root/direct/CMakeLists.txt" <<'EOF'
+cmake_minimum_required(VERSION 3.20)
 include("../prelude.cmake")
 
 add_library(fake_engine INTERFACE)
@@ -139,6 +144,7 @@ EOF
     echo "== verify: a dependency behind the approved target is rejected =="
     mkdir -p "$probe_root/transitive"
     cat > "$probe_root/transitive/CMakeLists.txt" <<'EOF'
+cmake_minimum_required(VERSION 3.20)
 include("../prelude.cmake")
 
 # The approved target itself reaching an engine must fail too, which is the

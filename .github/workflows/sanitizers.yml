@@ -105,10 +105,14 @@ jobs:
           --output-on-failure
 
       - name: Generate coverage report
+        # lcov 2.x treats a source file as external unless it lives under
+        # --directory or --base-directory, so --no-external alone would drop
+        # every file in sources/ and headers/ and leave an empty report.
         run: >
           lcov
           --capture
           --directory ${{ github.workspace }}/build
+          --base-directory ${{ github.workspace }}
           --output-file coverage.info
           --no-external
           --ignore-errors unused
