@@ -631,6 +631,128 @@ TEST(ScriptLoadingTest, ValidatesSearchPaths)
 	EXPECT_EQ(runtime.searchPaths().size(), 1U);
 }
 
+/// Outcome of importing the shadowed fixture module from two search paths.
+///
+/// Both directories hold a module named `shadowed`; each exposes `origin()`,
+/// which returns the directory that provided it.
+std::string originOfShadowedModule(const std::string &firstPath,
+								   const std::string &secondPath)
+{
+	mais::ScriptRuntime runtime;
+
+	EXPECT_TRUE(runtime.initialize().isOk());
+	EXPECT_TRUE(runtime.addSearchPath(firstPath).isOk());
+	EXPECT_TRUE(runtime.addSearchPath(secondPath).isOk());
+	EXPECT_TRUE(runtime.loadModule("shadowed").isOk());
+
+	mais::Result<std::string> origin =
+		runtime.callOptional<std::string>("shadowed", "origin");
+	EXPECT_TRUE(origin.isOk());
+	if (!origin.hasValue()) {
+		return {};
+	}
+	return origin.value();
+}
+
+/// Two search paths offering the same module name resolve to the first added,
+/// which is the order the documentation promises.
+TEST(SearchPathOrderTest, ResolvesAShadowedModuleToTheFirstAddedPath)
+{
+	const std::string first	 = scriptDirectory() + "/shadowing/first";
+	const std::string second = scriptDirectory() + "/shadowing/second";
+
+	EXPECT_EQ(originOfShadowedModule(first, second), "first");
+
+	// Reversing the order reverses the winner: the result follows the order the
+	// host added the paths in, not the directory names.
+	EXPECT_EQ(originOfShadowedModule(second, first), "second");
+}
+
+/// The configured paths are the leading `sys.path` entries, in insertion order,
+/// so the promised resolution order is visible to Python itself.
+TEST(SearchPathOrderTest, PutsTheSearchPathsAheadOfTheInterpreterEntries)
+{
+	const std::string first	 = scriptDirectory() + "/shadowing/first";
+	const std::string second = scriptDirectory() + "/shadowing/second";
+
+	mais::ScriptRuntime runtime;
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+	ASSERT_TRUE(runtime.addSearchPath(first).isOk());
+	ASSERT_TRUE(runtime.addSearchPath(second).isOk());
+
+	{
+		// The runtime holds the GIL, so reading sys.path here is safe.
+		pybind11::list sysPath(pybind11::module_::import("sys").attr("path"));
+
+		ASSERT_GE(pybind11::len(sysPath), 2);
+		EXPECT_EQ(sysPath[0].cast<std::string>(), first);
+		EXPECT_EQ(sysPath[1].cast<std::string>(), second);
+	}
+}
+
+/// A directory is recorded once, and repeating it changes neither the search
+/// order nor `sys.path`.
+TEST(SearchPathOrderTest, IgnoresADuplicateSearchPath)
+{
+	const std::string first	 = scriptDirectory() + "/shadowing/first";
+	const std::string second = scriptDirectory() + "/shadowing/second";
+
+	mais::ScriptRuntime runtime;
+
+	// Queued twice before the interpreter starts: one entry survives.
+	ASSERT_TRUE(runtime.addSearchPath(first).isOk());
+	ASSERT_TRUE(runtime.addSearchPath(first).isOk());
+	ASSERT_EQ(runtime.searchPaths().size(), 1U);
+
+	ASSERT_TRUE(runtime.initialize().isOk());
+
+	{
+		pybind11::list sysPath(pybind11::module_::import("sys").attr("path"));
+		const pybind11::ssize_t before = pybind11::len(sysPath);
+
+		std::size_t occurrences = 0;
+		for (const pybind11::handle entry: sysPath) {
+			if (entry.cast<std::string>() == first) {
+				++occurrences;
+			}
+		}
+		EXPECT_EQ(occurrences, 1U) << "a queued path must reach sys.path once";
+
+		// Repeating the path while running is a no-op too, and does not push a
+		// second copy in front of the paths added after it.
+		ASSERT_TRUE(runtime.addSearchPath(second).isOk());
+		ASSERT_TRUE(runtime.addSearchPath(second).isOk());
+		EXPECT_EQ(pybind11::len(sysPath), before + 1);
+		EXPECT_EQ(sysPath[0].cast<std::string>(), first);
+		EXPECT_EQ(sysPath[1].cast<std::string>(), second);
+	}
+
+	ASSERT_EQ(runtime.searchPaths().size(), 2U);
+	EXPECT_EQ(runtime.searchPaths()[0], first);
+	EXPECT_EQ(runtime.searchPaths()[1], second);
+
+	ASSERT_TRUE(runtime.loadModule("shadowed").isOk());
+	mais::Result<std::string> origin =
+		runtime.callOptional<std::string>("shadowed", "origin");
+	ASSERT_TRUE(origin.isOk());
+	ASSERT_TRUE(origin.hasValue());
+	EXPECT_EQ(origin.value(), "first");
+}
+
+/// Deduplication is literal, so two spellings of one directory are two paths —
+/// the documented reason a host should pass absolute, canonical paths.
+TEST(SearchPathOrderTest, TreatsTwoSpellingsOfOneDirectoryAsTwoPaths)
+{
+	mais::ScriptRuntime runtime;
+
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime.addSearchPath(scriptDirectory() + "/").isOk());
+
+	ASSERT_EQ(runtime.searchPaths().size(), 2U);
+	EXPECT_NE(runtime.searchPaths()[0], runtime.searchPaths()[1]);
+}
+
 TEST(BindingTest, KeepsBindingsAfterInitialize)
 {
 	mais::ScriptRuntime runtime;

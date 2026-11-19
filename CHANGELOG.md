@@ -95,9 +95,22 @@ as part of this scripting library. 1.0.0 is the first release of this runtime.
   default), so a consumer that adds a dependency to the target fails its own
   build. `--verify` proves the gate still rejects both kinds of violation, and
   a `Boundaries` workflow runs it in CI.
+- `docs/SCRIPT_PACKAGING.md`: the search-path contract (insertion order, how the
+  paths reach `sys.path`, duplicate and spelling rules, which directory wins),
+  the recommended layout for a source tree and for a packaged build with a
+  cross-platform way to locate it, and the `ErrorCode` each failure reports —
+  `ScriptNotFound` for a path that is not a directory, `ModuleNotFound` for a
+  module no path provides. Linked from `docs/GETTING_STARTED.md` and
+  `README.md`, and asserted by the tests below.
 
 ### Changed
 
+- Search-path precedence is now the insertion order the documentation promises:
+  the first directory added to `addSearchPath()` is the one Python searches
+  first. The configured paths form one leading `sys.path` block in insertion
+  order, so a path added while the runtime is running no longer jumps ahead of
+  the paths already configured; previously the most recently added path won a
+  name collision.
 - The project is now the generic scripting runtime described in
   `docs/ARCHITECTURE.md`. The earlier Vulkan/OpenXR rendering layer and its
   platform/backend build matrix (`BUILD_FOR_GLFW`, `BUILD_FOR_OPENXR`,
