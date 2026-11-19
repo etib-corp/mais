@@ -59,7 +59,9 @@ if(NOT BUILD_DOCS_ONLY)
     set(PYBIND11_FINDPYTHON ON CACHE BOOL "" FORCE)
     set(PYBIND11_INSTALL OFF CACHE BOOL "" FORCE)
     set(PYBIND11_TEST OFF CACHE BOOL "" FORCE)
-    set(MAIS_PYBIND11_TAG "v2.13.6")
+    # The fetched release has to support every version listed in
+    # cmake/PythonSupport.cmake: pybind11 supports Python 3.15 from 3.1.0.
+    set(MAIS_PYBIND11_TAG "v3.1.0")
 
     # Embedding links the Python runtime itself rather than the
     # extension-module shim, so a development installation is required.

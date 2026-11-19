@@ -7,7 +7,7 @@
 #
 # Entries are `major.minor`. Only add a version once it has passed the CI
 # matrix on Linux, macOS, and Windows in the pull request that adds it.
-set(MAIS_PYTHON_VERSIONS 3.9 3.10 3.11 3.12 3.13 3.14)
+set(MAIS_PYTHON_VERSIONS 3.9 3.10 3.11 3.12 3.13 3.14 3.15)
 
 # Computes the floor and ceiling of a version list.
 #
