@@ -35,9 +35,9 @@ Anything else is unvalidated and therefore unsupported.
 
 | Platform | CI image | Python |
 | --- | --- | --- |
-| Linux | `ubuntu-24.04` | 3.9 – 3.14 |
-| macOS | `macos-latest` (arm64) | 3.9 – 3.14 |
-| Windows | `windows-latest` (x86_64) | 3.9 – 3.14 |
+| Linux | `ubuntu-24.04` | 3.9 – 3.15 |
+| macOS | `macos-latest` (arm64) | 3.9 – 3.15 |
+| Windows | `windows-latest` (x86_64) | 3.9 – 3.15 |
 
 `cmake/PythonSupport.cmake` is the authoritative declaration of that range. It is
 the only place the range appears in the build: configuration rejects an

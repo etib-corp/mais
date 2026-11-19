@@ -195,9 +195,9 @@ in an optional adapter target and are never pulled in by the generic package.
 pybind11 is not ABI-compatible across major versions, so the installed package
 records the major it was built against and refuses to configure against a
 different one. Pin the same major as the maïs package you consume; this
-repository currently builds with pybind11 2.13.6, which `pip install
-pybind11==2.13.6` also provides. Note that `pip install pybind11` now installs
-3.x, which the package config rejects with an explanatory message.
+repository currently builds with pybind11 3.1.0, the first release that
+supports Python 3.15, which `pip install pybind11==3.1.0` also provides. A
+maïs package built against pybind11 2.x rejects it with an explanatory message.
 
 ## Integration with evan and guillaume
 

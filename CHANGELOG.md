@@ -112,6 +112,11 @@ as part of this scripting library. 1.0.0 is the first release of this runtime.
 
 ### Changed
 
+- Python 3.15 joins the supported range, now 3.9 – 3.15 on Linux, macOS, and
+  Windows. The pybind11 release fetched when none is installed moves from
+  2.13.6 to 3.1.0, the first one that supports Python 3.15. This is a pybind11
+  major change: an installed maïs package records the major it was built
+  against, so a consumer that provides its own pybind11 has to provide 3.x.
 - Search-path precedence is now the insertion order the documentation promises:
   the first directory added to `addSearchPath()` is the one Python searches
   first. The configured paths form one leading `sys.path` block in insertion
