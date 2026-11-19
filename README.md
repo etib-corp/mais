@@ -220,6 +220,7 @@ See [AGENTS.md](AGENTS.md) for repository development guidance and [TECHNICAL_CH
 - [docs/HOST_INTEGRATION.md](docs/HOST_INTEGRATION.md) — the adapter pattern, the validate-then-apply startup flow, and the per-frame hook schedule.
 - [docs/ERROR_HANDLING.md](docs/ERROR_HANDLING.md) — error taxonomy and tracebacks.
 - [docs/HOT_RELOAD.md](docs/HOT_RELOAD.md) — the reload and state-migration design: transaction boundaries, failure states, and the API proposed for M3.
+- [docs/SCRIPT_PACKAGING.md](docs/SCRIPT_PACKAGING.md) — where scripts live, and how the runtime finds them.
 - [docs/ROADMAP.md](docs/ROADMAP.md) — strategy, owners, and open questions.
 - [docs/MILESTONES.md](docs/MILESTONES.md) — the ordered increments and their exit criteria.
 - [docs/issues/](docs/issues/) — the work items, one file per issue.

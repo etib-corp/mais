@@ -560,12 +560,16 @@ namespace mais
 			return true;
 		}
 
-		/// Prepends `path` to `sys.path`; requires a live interpreter.
-		Error insertSearchPath(const std::string &path)
+		/// \brief Inserts `path` into `sys.path` at `index`.
+		///
+		/// The runtime's paths form one leading block in insertion order, so
+		/// the directory added first is the one Python searches first.
+		/// Requires a live interpreter.
+		Error insertSearchPath(const std::string &path, std::size_t index)
 		{
 			try {
 				py::object sysPath = py::module_::import("sys").attr("path");
-				sysPath.attr("insert")(0, py::str(path));
+				sysPath.attr("insert")(index, py::str(path));
 				return Error::ok();
 			} catch (py::error_already_set &error) {
 				return fromPythonError(error);
@@ -1066,8 +1070,9 @@ namespace mais
 
 		// initialize() is atomic: a failure leaves Python stopped rather than
 		// handing the host a half-configured runtime.
-		for (const std::string &path: _impl->searchPaths) {
-			Error error = _impl->insertSearchPath(path);
+		const std::vector<std::string> &paths = _impl->searchPaths;
+		for (std::size_t index = 0; index < paths.size(); ++index) {
+			Error error = _impl->insertSearchPath(paths[index], index);
 			if (error) {
 				_impl->stop();
 				return error;
@@ -1121,11 +1126,15 @@ namespace mais
 		if (std::find(paths.begin(), paths.end(), path) != paths.end()) {
 			return Error::ok();
 		}
+
+		// The path becomes the last entry of the runtime's block, never the
+		// first, so adding a path cannot reorder the ones already configured.
+		const std::size_t index = paths.size();
 		_impl->searchPaths.push_back(path);
 
 		if (_impl->running) {
 			py::gil_scoped_acquire gil;
-			return _impl->insertSearchPath(path);
+			return _impl->insertSearchPath(path, index);
 		}
 		return Error::ok();
 	}

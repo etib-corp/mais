@@ -73,7 +73,7 @@ Concretely:
 | `call()` / `callOptional()`, typed or policy-bearing | runs the hook | `WrongThread`, the hook does not run and starts no failure streak |
 | `hasFunction()` / `listFunctions()` | reads the module namespace | `WrongThread`, nothing is inspected |
 | `loadModule()` | imports the module | `WrongThread`, nothing is imported |
-| `addSearchPath()` while running | prepends to `sys.path` | `WrongThread`, the path is not recorded |
+| `addSearchPath()` while running | inserts the path after the paths already configured, so the search order stays the insertion order | `WrongThread`, the path is not recorded |
 | `addSearchPath()` while stopped | records the path, no Python involved | unsynchronized; the host must not race it with the owner's setup |
 | `shutdown()` | finalizes Python | `WrongThread`, the runtime keeps running |
 | `registerModule()` while running | fails with `AlreadyInitialized` | same |

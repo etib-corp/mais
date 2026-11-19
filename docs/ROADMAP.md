@@ -106,7 +106,7 @@ not add engine or UI code to maïs.*
 | HOST-2.3 | Document and implement the hook schedule at exact loop points, relative to engine update and render, respecting XR frame pacing. | `ARCHITECTURE.md` requires each consumer to specify this. | Next |
 | HOST-2.4 | Script console fed by maïs diagnostics, with frame-to-source navigation. | Depends on MAIS-1.5. | Later |
 | HOST-2.5 | `EngineSettings` panel bound to the same facade; UI components live here. | Never in maïs. | Later |
-| HOST-2.6 | Script packaging: dev versus shipped layout and resolution order. | maïs only resolves paths it is given. | Next |
+| HOST-2.6 | Script packaging: dev versus shipped layout and resolution order. | Documented in [`SCRIPT_PACKAGING.md`](SCRIPT_PACKAGING.md); maïs still resolves only the paths it is given. | Done |
 | HOST-2.7 | `SceneViewport`. | Blocked on renderer/window ownership being settled. | Blocked |
 
 **Exit criteria:** a script configures the engine through a validated facade, its
