@@ -619,7 +619,7 @@ when the interpreter is finalized, which is what the lifetime contract requires.
 | Topic | Status |
 | --- | --- |
 | Hooks on a thread other than the interpreter's owner | Not supported. [THREADING.md](THREADING.md) explains why, and MAIS-4.1 (#16) is the dispatch queue that would change it — only if Q5 in [ROADMAP.md](ROADMAP.md) is answered. |
-| Reloading a script inside a running session | Not available. Design in MAIS-3.1 (#12); reload and unload in MAIS-3.2 (#13); change detection in MAIS-3.3 (#14). Until then, editing a script needs a session restart. |
+| Reloading a script inside a running session | Not implemented. [HOT_RELOAD.md](HOT_RELOAD.md) is the design; reload and unload land in MAIS-3.2 (#13), change detection in MAIS-3.3 (#14), and opt-in state migration in MAIS-3.4 (#15). Until then, editing a script needs a session restart. |
 | Runtime reconfiguration after engine start | Engine-owned. Keep script-written settings in the startup proposal. |
 | Script packaging and resolution order | MAIS-2.3 (#11); maïs only resolves paths the host adds. |
 | A runnable frame-loop host | `examples/standalone_host` is runnable today and covers binding, invocation, policy, and shutdown. The frame-driven variant lands with #9; the excerpts above are the same structure. |

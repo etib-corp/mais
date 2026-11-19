@@ -76,9 +76,33 @@ maïs contains no UI. A consumer can implement `Panel`, `Button`, `Text`, `Input
 - Avoid reusing the old rendering project's one-platform/one-backend flags: they are unrelated to the scripting runtime.
 - Specify supported Python/C++/CMake versions, static/shared-library behavior, installation layout, and packaging once validated by CI and an external consumer test.
 
+## Module lifecycle and hot reload
+
+- **Decided (design):** reload is whole-module generation replacement of one
+  source-backed script module, on the interpreter-owning thread, at a
+  host-chosen safe point. A reload is transactional: the new generation is
+  executed and, when requested, restored before it is committed, and any
+  failure leaves the previous generation current. The previous generation is
+  released at commit, so a successful reload never leaves two generations
+  current. Native bindings are never reloaded.
+- **Decided (design):** state migration is opt-in and textual. The host names an
+  export and an import hook, the runtime transports an opaque `std::string`, and
+  the script validates its own schema and raises to refuse. maïs does not
+  interpret state, for the same reason it does not interpret engine settings.
+- **Decided (design):** detection is an explicit poll of loaded, source-backed
+  modules; maïs never watches files or reloads on its own. A reload is
+  synchronous and not preemptible, so the runtime reports its cost and the host
+  owns the frame-budget policy.
+- **Rejected:** per-hook replacement, `importlib.reload()` semantics,
+  subinterpreters per script, process swap, automatic dependency reload,
+  preemptive cancellation, an OS file watcher inside maïs, and `pickle`-based
+  state. The reasons and the full contract are in
+  [HOT_RELOAD.md](HOT_RELOAD.md).
+- **Not implemented:** the API additions in `HOT_RELOAD.md` require maintainer
+  approval and are tracked as MAIS-3.2 to MAIS-3.4.
+
 ## Deferred decisions
 
-- Hot reloading and state migration.
 - Python sandboxing and untrusted-script execution.
 - Multi-interpreter or multi-threaded callback execution: the threading model is decided in [THREADING.md](THREADING.md), and cross-thread dispatch needs its own design before any code (MAIS-4.1).
 - Engine-specific binding API breadth.

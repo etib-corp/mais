@@ -60,6 +60,13 @@ as part of this scripting library. 1.0.0 is the first release of this runtime.
   which thread owns the GIL, what the host must guarantee, what a violation
   returns, the rejected "release the GIL between calls" option, and the
   dispatch-queue design MAIS-4.1 starts from.
+- `docs/HOT_RELOAD.md`, the design record for M3 before any implementation:
+  whole-module generation replacement on the owning thread, a transactional
+  commit with rollback to the previous generation, what happens to old Python
+  objects and native wrappers, the failure state after every error, opt-in state
+  migration over an opaque text payload, an explicit change poll, the XR frame
+  budget and overrun behaviour, the test plan for MAIS-3.2 to MAIS-3.4, and the
+  API additions proposed for maintainer approval.
 - `docs/HOST_INTEGRATION.md`, the concrete recipe behind the ownership rules in
   `docs/ARCHITECTURE.md`: which parts belong to the adapter and which to the
   host, the narrow facade a consumer exposes to scripts and what must never

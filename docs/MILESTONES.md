@@ -137,24 +137,36 @@ The adapter, the UI widgets, and engine configuration, all of which belong to
 ## M3 - Reload scripts without restarting the headset app
 
 **Goal.** Edit a script, see the change in a running session, repeatedly, without
-leaks and without dropping frames beyond a documented budget.
+reference accumulation and without dropping frames beyond a documented budget.
+
+The design is [HOT_RELOAD.md](HOT_RELOAD.md). It fixes the semantics before any
+implementation: whole-module generation replacement, a transactional commit,
+opt-in textual state migration, an explicit change poll, and the API additions
+that need maintainer approval first. MAIS-3.1 is done; the other three start
+only after that approval.
 
 **Exit criteria.**
 
-- [ ] Requirements, ownership, and failure modes for reload are written down
-      before any implementation.
-- [ ] A module can be reloaded and unloaded explicitly, with old objects
-      released and no dangling native wrappers.
-- [ ] Script changes can be detected and applied within a stated frame budget.
-- [ ] State migration is explicit, opt-in, and schema-checked.
-- [ ] A soak test loops many reloads under ASan without leaks.
+- [x] Requirements, ownership, and failure modes for reload are written down
+      before any implementation: [HOT_RELOAD.md](HOT_RELOAD.md).
+- [ ] A module can be reloaded and unloaded explicitly; every failure leaves the
+      previous generation current and callable, and the report names the phase.
+- [ ] The previous generation is retired at commit: repeated reloads do not
+      accumulate, and no native wrapper or module object dangles.
+- [ ] Script changes are detected by an explicit poll and applied only at a
+      host-chosen safe point, with the duration reported and measured against
+      the host's frame budget.
+- [ ] State migration is explicit, opt-in, and schema-checked; a refused
+      migration rolls back.
+- [ ] A soak test loops many reloads under ASan without invalid accesses or
+      reference accumulation; long-session memory measurement is MAIS-4.2.
 
-| ID | Issue | Roadmap |
-| --- | --- | --- |
-| MAIS-3.1 | Design hot reload and state migration | MAIS-3.1 |
-| MAIS-3.2 | Add explicit module reload and unload | MAIS-1.6, MAIS-3.4 |
-| MAIS-3.3 | Detect script changes and apply them within a frame budget | MAIS-3.2 |
-| MAIS-3.4 | Add an opt-in state migration contract | MAIS-3.3 |
+| ID | Issue | Roadmap | Status |
+| --- | --- | --- | --- |
+| MAIS-3.1 | Design hot reload and state migration | MAIS-3.1 | Done |
+| MAIS-3.2 | Add explicit, transactional module reload and unload | MAIS-3.2 (absorbs MAIS-1.6 and the former reference-invalidation item) | Blocked on API approval |
+| MAIS-3.3 | Poll for script changes and apply them at a safe point | MAIS-3.3 | Blocked on API approval |
+| MAIS-3.4 | Add an opt-in state migration contract | MAIS-3.4 | Blocked on API approval |
 
 ## M4 - Survive long XR sessions
 
