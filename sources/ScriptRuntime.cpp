@@ -28,6 +28,7 @@
 #include <frameobject.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <concepts>
 #include <cstdint>
@@ -35,6 +36,7 @@
 #include <deque>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <string>
 #include <thread>
@@ -74,6 +76,61 @@ namespace mais
 				return {};
 			}
 			return std::string(text, static_cast<std::size_t>(size));
+		}
+
+		/// \brief Sets `__mais_generation__` on a module's namespace.
+		///
+		/// False when the module has no dictionary or the insertion fails; the
+		/// caller reports that rather than leaving a half-configured module.
+		bool setModuleGeneration(py::module_ &module, std::uint64_t generation)
+		{
+			PyObject *namespaceObject = PyModule_GetDict(module.ptr());
+			if (namespaceObject == nullptr) {
+				PyErr_Clear();
+				return false;
+			}
+
+			py::object value = py::cast(generation);
+			if (PyDict_SetItemString(namespaceObject, "__mais_generation__",
+									 value.ptr())
+				!= 0) {
+				PyErr_Clear();
+				return false;
+			}
+			return true;
+		}
+
+		/// \brief The absolute source path of an importable module, or empty.
+		///
+		/// Only a `.py` file is a source the reload can compile. A host binding
+		/// has no `__file__`, an extension module points at a shared library
+		/// and a sourceless `.pyc` points at bytecode, so none of them is
+		/// source-backed and all are refused by reloadModule().
+		std::string capturedSourcePath(const py::module_ &module)
+		{
+			py::object file = py::getattr(module, "__file__", py::none());
+			if (!file || !PyUnicode_Check(file.ptr())) {
+				return {};
+			}
+
+			const std::filesystem::path path(unicodeToUtf8(file.ptr()));
+			std::string extension = path.extension().string();
+			std::transform(extension.begin(), extension.end(),
+						   extension.begin(), [](unsigned char character) {
+							   return static_cast<char>(
+								   std::tolower(character));
+						   });
+			if (extension != ".py") {
+				return {};
+			}
+
+			std::error_code error;
+			const std::filesystem::path absolute =
+				std::filesystem::absolute(path, error);
+			if (error) {
+				return path.lexically_normal().string();
+			}
+			return absolute.lexically_normal().string();
 		}
 
 		/// Copies frames out of the traceback pybind11 already captured.
@@ -376,12 +433,32 @@ namespace mais
 		/// Directories added by addSearchPath(), in insertion order.
 		std::vector<std::string> searchPaths;
 
+		/// \brief A module the runtime imported or created.
+		///
+		/// A host binding has no source path and no generation: it is
+		/// interpreter infrastructure, not a reloadable script.
+		struct LoadedModule {
+			py::module_ module;
+			std::string sourcePath;
+			std::uint64_t generation = 0;
+			bool binding			 = false;
+		};
+
 		/// Every module the runtime imported or created, by module name.
-		std::unordered_map<std::string, py::module_> modules;
+		std::unordered_map<std::string, LoadedModule> modules;
 
 		/// The `traceback` module, imported once in initialize() so that
 		/// reporting a failure never imports anything while handling one.
 		py::object tracebackModule;
+
+		/// Cached `builtins`, used by reloadModule() to compile source text.
+		py::object builtinsModule;
+
+		/// Cached `importlib`, used for invalidate_caches().
+		py::object importlibModule;
+
+		/// Cached `importlib.util`, used to rebuild a module from its spec.
+		py::object importlibUtilModule;
 
 		/// \brief Failure accounting for one hook in the current run.
 		struct FailureRecord {
@@ -467,8 +544,17 @@ namespace mais
 				return {};
 			}
 			try {
+				// compile() raises without a traceback object, but
+				// format_exception still renders the exception and its
+				// file/line when given None explicitly.
+				py::object trace = error.trace();
+
+				if (!trace) {
+					trace = py::none();
+				}
+
 				py::object lines = tracebackModule.attr("format_exception")(
-					error.type(), error.value(), error.trace());
+					error.type(), error.value(), trace);
 				return py::str("").attr("join")(lines).cast<std::string>();
 			} catch (const std::exception &) {
 				// A traceback is best-effort; the error message still stands.
@@ -616,7 +702,11 @@ namespace mais
 								 + "' threw: " + error.what());
 			}
 
-			modules.emplace(binding.name, module);
+			LoadedModule loaded;
+
+			loaded.module  = module;
+			loaded.binding = true;
+			modules.emplace(binding.name, std::move(loaded));
 			return Error::ok();
 		}
 
@@ -640,7 +730,10 @@ namespace mais
 			// Python objects must be dropped while the interpreter is alive, so
 			// the module table is emptied before finalization.
 			modules.clear();
-			tracebackModule = py::object();
+			tracebackModule		= py::object();
+			builtinsModule		= py::object();
+			importlibModule		= py::object();
+			importlibUtilModule = py::object();
 			try {
 				interpreter.reset();
 			} catch (const std::exception &) {
@@ -672,7 +765,7 @@ namespace mais
 								  + "' is not loaded; call loadModule() first");
 				return nullptr;
 			}
-			return &module->second;
+			return &module->second.module;
 		}
 
 		/// Shared module checks for calls and introspection queries.
@@ -1057,14 +1150,18 @@ namespace mais
 		_impl->ownerThread = std::this_thread::get_id();
 
 		try {
-			// Cache the module now so that reporting a later failure never has
+			// Cache the modules now so that reporting a later failure never has
 			// to import anything while handling an exception.
-			_impl->tracebackModule = py::module_::import("traceback");
+			_impl->tracebackModule	   = py::module_::import("traceback");
+			_impl->builtinsModule	   = py::module_::import("builtins");
+			_impl->importlibModule	   = py::module_::import("importlib");
+			_impl->importlibUtilModule = py::module_::import("importlib.util");
 		} catch (const std::exception &error) {
 			_impl->stop();
 			return Error(
 				ErrorCode::InterpreterFailure,
-				std::string("could not import the Python 'traceback' module: ")
+				std::string("could not import the Python standard modules "
+							"the runtime needs: ")
 					+ error.what());
 		}
 
@@ -1157,10 +1254,33 @@ namespace mais
 			return Error(ErrorCode::InvalidArgument, "module name is empty");
 		}
 
+		// A second load of a module the runtime already owns is a no-op that
+		// keeps its generation; re-execution is reloadModule()'s job.
+		if (_impl->modules.find(moduleName) != _impl->modules.end()) {
+			return Error::ok();
+		}
+
 		py::gil_scoped_acquire gil;
 		try {
 			py::module_ module = py::module_::import(moduleName.c_str());
-			_impl->modules[moduleName] = module;
+			Impl::LoadedModule loaded;
+
+			loaded.module	  = module;
+			loaded.sourcePath = capturedSourcePath(module);
+
+			// Only a source-backed script module gets a generation; a
+			// non-source module is loaded but neither reloadable nor
+			// versioned.
+			if (!loaded.sourcePath.empty()) {
+				loaded.generation = 1;
+				if (!setModuleGeneration(loaded.module, loaded.generation)) {
+					return Error(
+						ErrorCode::InterpreterFailure,
+						"could not set __mais_generation__ on script module '"
+							+ moduleName + "'");
+				}
+			}
+			_impl->modules.emplace(moduleName, std::move(loaded));
 			return Error::ok();
 		} catch (py::error_already_set &error) {
 			Error failure		   = _impl->fromPythonError(error);
@@ -1177,6 +1297,527 @@ namespace mais
 	bool ScriptRuntime::isModuleLoaded(const std::string &moduleName) const
 	{
 		return _impl->modules.find(moduleName) != _impl->modules.end();
+	}
+
+	ReloadReport ScriptRuntime::reloadModule(const std::string &moduleName,
+											 const ReloadOptions &options)
+	{
+		ReloadReport report;
+		const auto started = std::chrono::steady_clock::now();
+
+		auto elapsed = [&started]() {
+			return std::chrono::duration_cast<std::chrono::nanoseconds>(
+				std::chrono::steady_clock::now() - started);
+		};
+		auto since = [](std::chrono::steady_clock::time_point start) {
+			return std::chrono::duration_cast<std::chrono::nanoseconds>(
+				std::chrono::steady_clock::now() - start);
+		};
+		auto fail = [&report, &elapsed](ReloadPhase phase, Error error) {
+			report.phase	= phase;
+			report.error	= std::move(error);
+			report.duration = elapsed();
+			return report;
+		};
+
+		if (!_impl->running) {
+			return fail(ReloadPhase::Validate,
+						Error(ErrorCode::NotInitialized,
+							  "reloadModule('" + moduleName
+								  + "'): the scripting runtime is not "
+									"running"));
+		}
+
+		// The report names the generation that stays live after a failure, so
+		// it is read before the thread check. The map itself is only mutated
+		// by the owning thread, and the host must not race that call.
+		Impl::LoadedModule *loaded = nullptr;
+
+		if (!moduleName.empty()) {
+			auto module = _impl->modules.find(moduleName);
+
+			if (module != _impl->modules.end()) {
+				loaded = &module->second;
+				if (!loaded->binding) {
+					report.generation = loaded->generation;
+				}
+			}
+		}
+
+		if (!_impl->ownsInterpreter()) {
+			return fail(ReloadPhase::Validate,
+						threadAffinityError("reloadModule()"));
+		}
+		if (moduleName.empty()) {
+			return fail(
+				ReloadPhase::Validate,
+				Error(ErrorCode::InvalidArgument, "module name is empty"));
+		}
+		if (loaded == nullptr) {
+			return fail(ReloadPhase::Validate,
+						Error(ErrorCode::ModuleNotFound,
+							  "script module '" + moduleName
+								  + "' is not loaded; call loadModule() "
+									"first"));
+		}
+		if (loaded->binding) {
+			return fail(ReloadPhase::Validate,
+						Error(ErrorCode::InvalidArgument,
+							  "host binding '" + moduleName
+								  + "' cannot be reloaded: bindings are "
+									"interpreter infrastructure, not script "
+									"modules"));
+		}
+		if (loaded->sourcePath.empty()) {
+			return fail(ReloadPhase::Validate,
+						Error(ErrorCode::InvalidArgument,
+							  "script module '" + moduleName
+								  + "' has no source file and cannot be "
+									"reloaded"));
+		}
+
+		const bool exportRequested = !options.exportFunction.empty();
+		const bool importRequested = !options.importFunction.empty();
+
+		if (exportRequested != importRequested) {
+			return fail(ReloadPhase::Validate,
+						Error(ErrorCode::InvalidArgument,
+							  "state migration for '" + moduleName
+								  + "' needs both exportFunction and "
+									"importFunction, or neither"));
+		}
+
+		py::gil_scoped_acquire gil;
+		ReloadPhase phase = ReloadPhase::Validate;
+
+		py::dict sysModules;
+		py::object previousEntry;
+		bool hadPrevious = false;
+		bool swapped	 = false;
+
+		auto restoreSysModules = [&]() noexcept {
+			if (!swapped) {
+				return;
+			}
+			if (hadPrevious) {
+				if (PyDict_SetItemString(sysModules.ptr(), moduleName.c_str(),
+										 previousEntry.ptr())
+					!= 0) {
+					PyErr_Clear();
+				}
+			} else if (PyDict_DelItemString(sysModules.ptr(),
+											moduleName.c_str())
+					   != 0) {
+				PyErr_Clear();
+			}
+			swapped = false;
+		};
+
+		try {
+			py::module_ &previous			   = loaded->module;
+			const std::string sourcePath	   = loaded->sourcePath;
+			const std::uint64_t nextGeneration = loaded->generation + 1;
+
+			// -- Export ------------------------------------------------------
+			std::string stateText;
+
+			if (exportRequested) {
+				phase				  = ReloadPhase::Export;
+				const auto phaseStart = std::chrono::steady_clock::now();
+				py::object exporter	  = py::getattr(
+					  previous, options.exportFunction.c_str(), py::none());
+
+				if (!exporter || exporter.is_none()) {
+					report.stateDuration += since(phaseStart);
+					return fail(ReloadPhase::Export,
+								Error(ErrorCode::FunctionNotFound,
+									  "'" + moduleName + "' has no function '"
+										  + options.exportFunction
+										  + "' to export state"));
+				}
+				if (!PyCallable_Check(exporter.ptr())) {
+					report.stateDuration += since(phaseStart);
+					return fail(ReloadPhase::Export,
+								Error(ErrorCode::TypeMismatch,
+									  "'" + moduleName + "."
+										  + options.exportFunction
+										  + "' is not callable"));
+				}
+
+				py::object exported;
+
+				try {
+					exported = exporter();
+				} catch (py::error_already_set &error) {
+					report.stateDuration += since(phaseStart);
+					Error failure = _impl->fromPythonError(error);
+
+					return fail(
+						ReloadPhase::Export,
+						withDiagnostics(
+							failure,
+							"state export '" + moduleName + "."
+								+ options.exportFunction
+								+ "' failed; the previous generation is "
+								  "still current: "
+								+ failure.message()));
+				}
+				if (!PyUnicode_Check(exported.ptr())) {
+					report.stateDuration += since(phaseStart);
+					return fail(
+						ReloadPhase::Export,
+						Error(ErrorCode::TypeMismatch,
+							  "'" + moduleName + "." + options.exportFunction
+								  + "' returned " + pythonTypeName(exported)
+								  + ", but str was expected"));
+				}
+
+				stateText			 = unicodeToUtf8(exported.ptr());
+				report.stateExported = true;
+				report.stateDuration += since(phaseStart);
+			}
+
+			// -- Compile -----------------------------------------------------
+			phase					= ReloadPhase::Compile;
+			const auto compileStart = std::chrono::steady_clock::now();
+			std::error_code filesystemError;
+
+			if (!std::filesystem::is_regular_file(sourcePath,
+												  filesystemError)) {
+				const std::string reason = filesystemError
+					? ": " + filesystemError.message()
+					: std::string();
+
+				report.compileDuration += since(compileStart);
+				return fail(ReloadPhase::Compile,
+							Error(ErrorCode::ModuleNotFound,
+								  "source file '" + sourcePath
+									  + "' for script module '" + moduleName
+									  + "' is missing or unreadable" + reason));
+			}
+
+			std::ifstream sourceFile(sourcePath, std::ios::binary);
+
+			if (!sourceFile) {
+				report.compileDuration += since(compileStart);
+				return fail(ReloadPhase::Compile,
+							Error(ErrorCode::ModuleNotFound,
+								  "could not open source file '" + sourcePath
+									  + "' for script module '" + moduleName
+									  + "'"));
+			}
+
+			const std::string sourceText(
+				(std::istreambuf_iterator<char>(sourceFile)),
+				std::istreambuf_iterator<char>());
+
+			if (sourceFile.bad()) {
+				report.compileDuration += since(compileStart);
+				return fail(ReloadPhase::Compile,
+							Error(ErrorCode::ModuleNotFound,
+								  "could not read source file '" + sourcePath
+									  + "' for script module '" + moduleName
+									  + "'"));
+			}
+
+			py::object code;
+
+			try {
+				code = _impl->builtinsModule.attr("compile")(
+					py::bytes(sourceText), py::str(sourcePath), py::str("exec"),
+					py::int_(0), py::bool_(true));
+			} catch (py::error_already_set &error) {
+				report.compileDuration += since(compileStart);
+				Error failure = _impl->fromPythonError(error);
+
+				return fail(ReloadPhase::Compile,
+							withDiagnostics(failure,
+											"could not compile '" + sourcePath
+												+ "' for script module '"
+												+ moduleName
+												+ "': " + failure.message()));
+			}
+			report.compileDuration += since(compileStart);
+
+			// -- Execute -----------------------------------------------------
+			phase = ReloadPhase::Execute;
+
+			py::object spec = py::getattr(previous, "__spec__", py::none());
+			py::module_ newModule;
+
+			if (spec && !spec.is_none()) {
+				newModule =
+					_impl->importlibUtilModule.attr("module_from_spec")(spec)
+						.cast<py::module_>();
+			}
+			if (!newModule) {
+				newModule = py::reinterpret_steal<py::module_>(
+					PyModule_New(moduleName.c_str()));
+			}
+			if (!newModule) {
+				throw py::error_already_set();
+			}
+
+			py::dict moduleNamespace = newModule.attr("__dict__");
+
+			// A module executed by the import machinery already has builtins
+			// in its namespace; a fresh module object does not.
+			moduleNamespace["__builtins__"] = _impl->builtinsModule;
+			py::setattr(newModule, "__file__", py::str(sourcePath));
+
+			// An import performed by the new body must see the current
+			// filesystem rather than a cache from the previous generation.
+			_impl->importlibModule.attr("invalidate_caches")();
+
+			sysModules = py::module_::import("sys").attr("modules");
+
+			PyObject *entry =
+				PyDict_GetItemString(sysModules.ptr(), moduleName.c_str());
+
+			if (entry != nullptr) {
+				previousEntry = py::reinterpret_borrow<py::object>(entry);
+				hadPrevious	  = true;
+			}
+			// The new body imports under its own name, exactly as during a
+			// normal import; the previous entry is restored on any failure.
+			if (PyDict_SetItemString(sysModules.ptr(), moduleName.c_str(),
+									 newModule.ptr())
+				!= 0) {
+				throw py::error_already_set();
+			}
+			swapped = true;
+
+			const auto executeStart = std::chrono::steady_clock::now();
+
+			try {
+				// The source was compiled above with dont_inherit, so the
+				// code object is executed as-is rather than recompiled from a
+				// string.
+				py::object result = py::reinterpret_steal<py::object>(
+					PyEval_EvalCode(code.ptr(), moduleNamespace.ptr(),
+									moduleNamespace.ptr()));
+
+				if (!result) {
+					throw py::error_already_set();
+				}
+			} catch (py::error_already_set &error) {
+				report.executeDuration += since(executeStart);
+				restoreSysModules();
+
+				Error failure = _impl->fromPythonError(error);
+
+				return fail(
+					ReloadPhase::Execute,
+					withDiagnostics(
+						failure,
+						"script module '" + moduleName
+							+ "' raised while executing the new generation: "
+							+ failure.message()));
+			} catch (const std::exception &error) {
+				report.executeDuration += since(executeStart);
+				restoreSysModules();
+				return fail(ReloadPhase::Execute,
+							Error(ErrorCode::InvocationFailed,
+								  "script module '" + moduleName
+									  + "' could not execute the new "
+										"generation: "
+									  + error.what()));
+			}
+			report.executeDuration += since(executeStart);
+
+			if (!setModuleGeneration(newModule, nextGeneration)) {
+				restoreSysModules();
+				return fail(ReloadPhase::Execute,
+							Error(ErrorCode::InterpreterFailure,
+								  "could not set __mais_generation__ on script "
+								  "module '"
+									  + moduleName + "'"));
+			}
+
+			// -- Restore -----------------------------------------------------
+			if (importRequested) {
+				phase				  = ReloadPhase::Restore;
+				const auto phaseStart = std::chrono::steady_clock::now();
+				py::object importer	  = py::getattr(
+					  newModule, options.importFunction.c_str(), py::none());
+
+				if (!importer || importer.is_none()) {
+					report.stateDuration += since(phaseStart);
+					restoreSysModules();
+					return fail(ReloadPhase::Restore,
+								Error(ErrorCode::FunctionNotFound,
+									  "new generation of '" + moduleName
+										  + "' has no function '"
+										  + options.importFunction
+										  + "' to import state"));
+				}
+				if (!PyCallable_Check(importer.ptr())) {
+					report.stateDuration += since(phaseStart);
+					restoreSysModules();
+					return fail(ReloadPhase::Restore,
+								Error(ErrorCode::TypeMismatch,
+									  "'" + moduleName + "."
+										  + options.importFunction
+										  + "' is not callable"));
+				}
+
+				try {
+					importer(py::str(stateText));
+				} catch (py::error_already_set &error) {
+					report.stateDuration += since(phaseStart);
+					restoreSysModules();
+
+					Error failure = _impl->fromPythonError(error);
+
+					return fail(
+						ReloadPhase::Restore,
+						withDiagnostics(
+							failure,
+							"state import '" + moduleName + "."
+								+ options.importFunction
+								+ "' failed; the previous generation and its "
+								  "state are still current: "
+								+ failure.message()));
+				} catch (const std::exception &error) {
+					report.stateDuration += since(phaseStart);
+					restoreSysModules();
+					return fail(
+						ReloadPhase::Restore,
+						Error(ErrorCode::InvocationFailed,
+							  "state import '" + moduleName + "."
+								  + options.importFunction
+								  + "' failed; the previous generation is "
+									"still current: "
+								  + error.what()));
+				}
+				report.stateRestored = true;
+				report.stateDuration += since(phaseStart);
+			}
+
+			// -- Commit ------------------------------------------------------
+			phase = ReloadPhase::Commit;
+
+			// The only point after which the new generation is current. The
+			// previous module reference is dropped here; if nothing else
+			// holds it, its finalizers run now on the owning thread.
+			loaded->module	   = newModule;
+			loaded->generation = nextGeneration;
+
+			report.phase	  = ReloadPhase::Commit;
+			report.error	  = Error::ok();
+			report.generation = nextGeneration;
+			report.duration	  = elapsed();
+			return report;
+		} catch (py::error_already_set &error) {
+			restoreSysModules();
+
+			Error failure = _impl->fromPythonError(error);
+
+			report.phase = phase;
+			report.error =
+				withDiagnostics(failure,
+								"reloadModule('" + moduleName
+									+ "') failed: " + failure.message());
+		} catch (const std::exception &error) {
+			restoreSysModules();
+
+			report.phase = phase;
+			report.error = Error(ErrorCode::InvocationFailed,
+								 "reloadModule('" + moduleName
+									 + "') failed: " + error.what());
+		}
+
+		report.duration = elapsed();
+		return report;
+	}
+
+	Error ScriptRuntime::unloadModule(const std::string &moduleName)
+	{
+		if (!_impl->running) {
+			return Error(ErrorCode::NotInitialized,
+						 "the scripting runtime is not running");
+		}
+		if (!_impl->ownsInterpreter()) {
+			return threadAffinityError("unloadModule()");
+		}
+		if (moduleName.empty()) {
+			return Error(ErrorCode::InvalidArgument, "module name is empty");
+		}
+
+		auto module = _impl->modules.find(moduleName);
+
+		if (module == _impl->modules.end()) {
+			return Error(ErrorCode::ModuleNotFound,
+						 "script module '" + moduleName
+							 + "' is not loaded; call loadModule() first");
+		}
+		if (module->second.binding) {
+			return Error(ErrorCode::InvalidArgument,
+						 "host binding '" + moduleName
+							 + "' cannot be unloaded: bindings are "
+							   "interpreter infrastructure, not script "
+							   "modules");
+		}
+
+		py::gil_scoped_acquire gil;
+		try {
+			py::dict sysModules = py::module_::import("sys").attr("modules");
+			PyObject *entry =
+				PyDict_GetItemString(sysModules.ptr(), moduleName.c_str());
+
+			// Script code that replaced or deleted the entry is unsupported:
+			// the runtime removes only the entry it still owns.
+			if (entry != nullptr && entry == module->second.module.ptr()) {
+				if (PyDict_DelItemString(sysModules.ptr(), moduleName.c_str())
+					!= 0) {
+					PyErr_Clear();
+				}
+			}
+			_impl->modules.erase(module);
+			return Error::ok();
+		} catch (py::error_already_set &error) {
+			return _impl->fromPythonError(error);
+		} catch (const std::exception &error) {
+			return Error(ErrorCode::InvocationFailed,
+						 "could not unload script module '" + moduleName
+							 + "': " + error.what());
+		}
+	}
+
+	Result<std::uint64_t>
+		ScriptRuntime::moduleGeneration(std::string_view moduleName) const
+	{
+		if (!_impl->running) {
+			return Result<std::uint64_t>(
+				Error(ErrorCode::NotInitialized,
+					  "the scripting runtime is not running"));
+		}
+		if (moduleName.empty()) {
+			return Result<std::uint64_t>(
+				Error(ErrorCode::InvalidArgument, "module name is empty"));
+		}
+
+		auto module = _impl->modules.find(std::string(moduleName));
+
+		if (module == _impl->modules.end()) {
+			return Result<std::uint64_t>(Error(ErrorCode::ModuleNotFound,
+											   "script module '"
+												   + std::string(moduleName)
+												   + "' is not loaded"));
+		}
+		if (module->second.binding) {
+			return Result<std::uint64_t>(Error(ErrorCode::InvalidArgument,
+											   "host binding '"
+												   + std::string(moduleName)
+												   + "' has no generation"));
+		}
+		if (module->second.sourcePath.empty()) {
+			return Result<std::uint64_t>(
+				Error(ErrorCode::InvalidArgument,
+					  "script module '" + std::string(moduleName)
+						  + "' has no source file and no generation"));
+		}
+		return Result<std::uint64_t>(module->second.generation);
 	}
 
 	Result<bool> ScriptRuntime::hasFunction(std::string_view moduleName,

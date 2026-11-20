@@ -41,6 +41,26 @@ as part of this scripting library. 1.0.0 is the first release of this runtime.
   modules before the interpreter starts, and their callbacks run once Python is
   live. This replaces `PYBIND11_EMBEDDED_MODULE` for embedded hosts, so no
   extension module has to be built, installed, or placed on an import path.
+- `mais::ScriptRuntime::reloadModule()`, `unloadModule()` and
+  `moduleGeneration()`: a source-backed module can be re-executed as a new
+  generation or released without stopping the interpreter. A reload is
+  transactional — the new body runs in a fresh module object while the previous
+  one is retained, `sys.modules` is restored on every failure, and the previous
+  generation stays current and callable. The new
+  `mais::ReloadPhase`, `mais::ReloadOptions` and `mais::ReloadReport` carry the
+  phase reached, the total/compile/execute/state durations, the generation that
+  is live when the call returns, and a recoverable `mais::Error` with the Python
+  traceback. `__mais_generation__` is set on every source-backed script module
+  after its body succeeds and increments only on a successful reload; the
+  previous generation is released at commit, so repeated reloads do not
+  accumulate module objects.
+  Host bindings are refused with `InvalidArgument`, and the owning thread is the
+  only thread allowed to reload or unload.
+- `mais::ReloadOptions`: opt-in state migration for `reloadModule()`, carrying
+  an opaque text payload between a host-named export hook on the previous
+  generation and an import hook on the new one. Both names or neither; the
+  script owns schema validation and raises to refuse, which rolls the reload
+  back to the previous generation and its state.
 - `mais::Error`, `mais::ErrorCode`, `isOk`/`isRecoverable`/`isFatal`, and
   `mais::ScriptArgument`: every fallible operation reports a message plus a
   Python traceback instead of throwing or returning a bare Boolean.
@@ -81,8 +101,15 @@ as part of this scripting library. 1.0.0 is the first release of this runtime.
   three sequential restarts, and destruction without an explicit `shutdown()`.
 - Thread-affinity tests: a second thread is refused with `WrongThread` for
   `call()`, `callOptional()`, `call<T>()`, `hasFunction()`, `listFunctions()`,
-  `loadModule()`, `addSearchPath()` and `shutdown()`, the owning thread keeps
-  working afterwards, and ownership follows each `initialize()`.
+  `loadModule()`, `reloadModule()`, `unloadModule()`, `addSearchPath()` and
+  `shutdown()`, the owning thread keeps working afterwards, and ownership
+  follows each `initialize()`.
+- Module-reload tests: code replacement and generation tracking, `sys.modules`
+  identity, reset versus migrated state, rollback after a syntax error, a body
+  exception, a missing source and a failed export/import hook, unload and
+  unload-then-load, retirement proven with weakrefs, bindings and old native
+  wrappers surviving reloads, package identity, and a 500-reload soak that runs
+  in the ASan job.
 - `examples/standalone_host`, a complete host with no engine, no UI, and no
   dependency on `guillaume` or `evan`. CTest runs it as an integration test.
 - `examples/frame_loop_host`, the worked M2 integration pattern: a settings

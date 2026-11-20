@@ -119,13 +119,13 @@ application console — with maïs unchanged except as M1 requires.
 granularity, what a reload re-executes, the lifetime of the previous generation,
 native bindings and host objects, failure states, opt-in state migration,
 observability, the frame budget, the test plan, and the API additions that need
-approval before implementation. MAIS-3.1 is done; MAIS-3.2 to MAIS-3.4 are
-blocked on that approval.
+approval before implementation. MAIS-3.1 and MAIS-3.2 are done; MAIS-3.3
+and MAIS-3.4 remain blocked on approval.
 
 | ID | Item | Notes | Status |
 | --- | --- | --- | --- |
 | MAIS-3.1 | **Design document**: requirements, ownership, failure modes, what state may be migrated. | Done: [HOT_RELOAD.md](HOT_RELOAD.md). Gate for everything below. | Done |
-| MAIS-3.2 | **Explicit, transactional module lifecycle.** `reloadModule()` and `unloadModule()`, generation tracking, atomic commit and rollback, and retirement of the previous generation with no dangling native wrappers. Absorbs MAIS-1.6 and the former reference-invalidation item. | Iterating on an XR app should not mean a headset restart. A failed edit must leave the previous generation current. | Blocked: API approval |
+| MAIS-3.2 | **Explicit, transactional module lifecycle.** `reloadModule()` and `unloadModule()`, generation tracking, atomic commit and rollback, and retirement of the previous generation with no dangling native wrappers. Absorbs MAIS-1.6 and the former reference-invalidation item. | Iterating on an XR app should not mean a headset restart. A failed edit must leave the previous generation current. | Done |
 | MAIS-3.3 | **Change detection and a measured apply.** `pollModuleChanges()` over source-backed loaded modules; the host applies at a safe point and reads the duration from the reload report. No watcher thread, no preemption. | Detection is a cheap poll; the reload itself is the frame cost, and the host owns the budget. | Blocked: API approval |
 | MAIS-3.4 | **Opt-in state migration.** Host-named export/import hooks, an opaque text payload, script-side schema validation, and rollback when the import hook refuses. | Silent state loss is worse than no reload. | Blocked: API approval |
 

@@ -215,6 +215,94 @@ namespace mais
 		}
 	};
 
+	/// \brief Where one reload attempt stopped.
+	///
+	/// The phase, not the error code, distinguishes a compile failure from an
+	/// execution failure: a syntax error and an exception in the module body
+	/// can both report InvocationFailed.
+	enum class ReloadPhase {
+		/// Runtime state, module name, module kind and options.
+		Validate,
+
+		/// State export hook on the previous generation.
+		Export,
+
+		/// Reading and compiling the captured source.
+		Compile,
+
+		/// Creating and executing the new module body.
+		Execute,
+
+		/// State import hook on the new generation.
+		Restore,
+
+		/// The new generation is current.
+		Commit,
+	};
+
+	/// \brief Opt-in state migration for one reload.
+	///
+	/// Both fields are either set or empty. The export function runs on the
+	/// previous generation and returns the state as a `str`; the import
+	/// function runs on the new generation and accepts that `str`. The payload
+	/// is opaque text: the script validates its own schema and raises to
+	/// refuse. See docs/HOT_RELOAD.md.
+	struct ReloadOptions {
+		/// Function on the previous generation returning the state as `str`.
+		std::string exportFunction;
+
+		/// Function on the new generation accepting that `str`.
+		std::string importFunction;
+	};
+
+	/// \brief The outcome of one reload attempt.
+	///
+	/// The previous generation stays current after every failure, so a host
+	/// can keep calling its hooks; `error` describes what went wrong and
+	/// `phase` says where. A successful attempt reports Ok and ReloadPhase::
+	/// Commit.
+	struct ReloadReport {
+		/// `Ok` when the new generation is current; the failure otherwise.
+		Error error;
+
+		/// Where the attempt stopped.
+		ReloadPhase phase = ReloadPhase::Commit;
+
+		/// Total wall time of the attempt.
+		std::chrono::nanoseconds duration {};
+
+		/// Reading and compiling the captured source.
+		std::chrono::nanoseconds compileDuration {};
+
+		/// Executing the new module body.
+		std::chrono::nanoseconds executeDuration {};
+
+		/// Export plus restore, or zero when migration was not requested.
+		std::chrono::nanoseconds stateDuration {};
+
+		/// Generation that is current when the call returns; unchanged on
+		/// failure, and 0 when no generation is current.
+		std::uint64_t generation = 0;
+
+		/// True when the export hook ran and returned text.
+		bool stateExported = false;
+
+		/// True when the import hook accepted that text.
+		bool stateRestored = false;
+
+		/// True when the new generation is current.
+		[[nodiscard]] bool isOk() const noexcept
+		{
+			return error.isOk();
+		}
+
+		/// True when the attempt failed; mirrors Error's operator bool.
+		explicit operator bool() const noexcept
+		{
+			return !error.isOk();
+		}
+	};
+
 	/// \brief Owns an embedded Python interpreter and runs host-defined
 	/// scripts.
 	///
@@ -255,10 +343,11 @@ namespace mais
 	/// written for that thread and normally run while a hook is executing.
 	///
 	/// Every method that touches Python must therefore be called from that
-	/// thread — initialize(), shutdown(), loadModule(), addSearchPath() while
-	/// the runtime is running, hasFunction(), listFunctions(), and every
-	/// call()/callOptional() overload, including the typed and the
-	/// policy-bearing ones. A call from any other thread is refused with
+	/// thread — initialize(), shutdown(), loadModule(), reloadModule(),
+	/// unloadModule(), addSearchPath() while the runtime is running,
+	/// hasFunction(), listFunctions(), and every call()/callOptional()
+	/// overload, including the typed and the policy-bearing ones. A call from
+	/// any other thread is refused with
 	/// ErrorCode::WrongThread instead of blocking on the GIL. The runtime is
 	/// not internally synchronized, so the accessors that only read C++ state
 	/// (isRunning(), searchPaths(), bindings(), isModuleLoaded()) are safe only
@@ -381,6 +470,62 @@ namespace mais
 		/// True when `moduleName` was imported by loadModule() or registered as
 		/// a host binding.
 		[[nodiscard]] bool isModuleLoaded(const std::string &moduleName) const;
+
+		/// \brief Re-executes a loaded, source-backed module as a new
+		/// generation.
+		///
+		/// The new generation executes in a fresh module object while the
+		/// previous one is retained privately. Nothing becomes visible to the
+		/// runtime or to later `import` statements until the new body, and any
+		/// requested state migration, have succeeded; every failure therefore
+		/// leaves the previous generation current and callable.
+		///
+		/// Generation
+		/// ----------
+		/// A first load records generation 1, each successful reload increments
+		/// it, and an unload followed by a load starts again at 1. The
+		/// generation is also written to the module as `__mais_generation__`
+		/// after the module body succeeds; module-level code must not read it
+		/// during execution, but functions may read it at call time.
+		///
+		/// Refused modules
+		/// ---------------
+		/// Only modules loaded by loadModule() from a `.py` source are
+		/// reloadable. Host bindings and modules without a source file are
+		/// refused with InvalidArgument, and dependencies a script imported on
+		/// its own are not reloadable until the host loads them explicitly.
+		///
+		/// \returns A report whose `phase` names the step that stopped. The
+		/// call never throws and never stops the interpreter for an expected
+		/// failure; `error` carries the Python traceback when Python raised.
+		[[nodiscard]] ReloadReport
+			reloadModule(const std::string &moduleName,
+						 const ReloadOptions &options = {});
+
+		/// \brief Releases a loaded script module.
+		///
+		/// `isModuleLoaded()` and later calls report ModuleNotFound, exactly as
+		/// for a module that was never loaded. The runtime removes the
+		/// `sys.modules` entry only while it still points at the runtime's own
+		/// module object. A host binding is refused with InvalidArgument, and
+		/// an unknown module with ModuleNotFound.
+		///
+		/// \returns NotInitialized, InvalidArgument, ModuleNotFound, or
+		/// WrongThread when called from a thread that does not own the
+		/// interpreter. A refusal changes nothing.
+		Error unloadModule(const std::string &moduleName);
+
+		/// \brief The generation of a loaded script module.
+		///
+		/// This is a read-only C++ accessor: it acquires no lock and touches no
+		/// Python, so it follows isModuleLoaded() and is safe only while the
+		/// host does not race a call that changes runtime state.
+		/// \returns NotInitialized, InvalidArgument when `moduleName` is empty,
+		/// names a host binding, or names a module without a source file
+		/// (neither has a generation), or ModuleNotFound when the module is
+		/// not loaded.
+		[[nodiscard]] Result<std::uint64_t>
+			moduleGeneration(std::string_view moduleName) const;
 
 		// -- Introspection ---------------------------------------------------
 

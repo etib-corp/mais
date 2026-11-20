@@ -142,29 +142,29 @@ reference accumulation and without dropping frames beyond a documented budget.
 The design is [HOT_RELOAD.md](HOT_RELOAD.md). It fixes the semantics before any
 implementation: whole-module generation replacement, a transactional commit,
 opt-in textual state migration, an explicit change poll, and the API additions
-that need maintainer approval first. MAIS-3.1 is done; the other three start
-only after that approval.
+that need maintainer approval first. MAIS-3.1 and MAIS-3.2 are done; MAIS-3.3
+and MAIS-3.4 start only after approval.
 
 **Exit criteria.**
 
 - [x] Requirements, ownership, and failure modes for reload are written down
       before any implementation: [HOT_RELOAD.md](HOT_RELOAD.md).
-- [ ] A module can be reloaded and unloaded explicitly; every failure leaves the
+- [x] A module can be reloaded and unloaded explicitly; every failure leaves the
       previous generation current and callable, and the report names the phase.
-- [ ] The previous generation is retired at commit: repeated reloads do not
+- [x] The previous generation is retired at commit: repeated reloads do not
       accumulate, and no native wrapper or module object dangles.
 - [ ] Script changes are detected by an explicit poll and applied only at a
       host-chosen safe point, with the duration reported and measured against
       the host's frame budget.
 - [ ] State migration is explicit, opt-in, and schema-checked; a refused
       migration rolls back.
-- [ ] A soak test loops many reloads under ASan without invalid accesses or
+- [x] A soak test loops many reloads under ASan without invalid accesses or
       reference accumulation; long-session memory measurement is MAIS-4.2.
 
 | ID | Issue | Roadmap | Status |
 | --- | --- | --- | --- |
 | MAIS-3.1 | Design hot reload and state migration | MAIS-3.1 | Done |
-| MAIS-3.2 | Add explicit, transactional module reload and unload | MAIS-3.2 (absorbs MAIS-1.6 and the former reference-invalidation item) | Blocked on API approval |
+| MAIS-3.2 | Add explicit, transactional module reload and unload | MAIS-3.2 (absorbs MAIS-1.6 and the former reference-invalidation item) | Done |
 | MAIS-3.3 | Poll for script changes and apply them at a safe point | MAIS-3.3 | Blocked on API approval |
 | MAIS-3.4 | Add an opt-in state migration contract | MAIS-3.4 | Blocked on API approval |
 

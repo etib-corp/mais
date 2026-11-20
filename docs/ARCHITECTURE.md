@@ -107,8 +107,7 @@ Host-owned native objects outlive a reload by the same rule that makes them
 outlive a call: they must outlive the runtime.
 
 The guarantees, the failure states, the opt-in state-migration contract, the
-frame budget, and the API proposed for M3 are in
-[HOT_RELOAD.md](HOT_RELOAD.md).
+frame budget, and the M3 API are in [HOT_RELOAD.md](HOT_RELOAD.md).
 
 ## Application lifecycle
 

@@ -311,3 +311,47 @@ TEST(ThreadAffinityTest, RefusesPolicyCallsFromAnotherThread)
 
 	ASSERT_TRUE(runtime->shutdown().isOk());
 }
+
+/// Reload and unload re-execute and release Python state, so they obey the
+/// same affinity rule as every other interpreter operation.
+TEST(ThreadAffinityTest, RefusesReloadAndUnloadFromAnotherThread)
+{
+	auto runtime = std::make_shared<mais::ScriptRuntime>();
+	mais_test::FakeCounter counter("reload-affinity");
+
+	mais_test::bindFakeHost(*runtime, counter);
+	ASSERT_TRUE(runtime->addSearchPath(scriptDirectory()).isOk());
+	ASSERT_TRUE(runtime->initialize().isOk());
+	ASSERT_TRUE(runtime->loadModule("fake_host").isOk());
+
+	struct Refusals {
+		mais::ReloadReport reload;
+		mais::Error unload;
+	};
+
+	std::optional<Refusals> refusals = runOnForeignThread<Refusals>([runtime] {
+		return Refusals {
+			runtime->reloadModule("fake_host"),
+			runtime->unloadModule("fake_host"),
+		};
+	});
+	ASSERT_TRUE(refusals.has_value())
+		<< blockedMessage("reloadModule(), unloadModule()");
+
+	EXPECT_EQ(refusals->reload.phase, mais::ReloadPhase::Validate);
+	EXPECT_EQ(refusals->reload.error.code(), mais::ErrorCode::WrongThread);
+	EXPECT_FALSE(refusals->reload.isOk());
+	EXPECT_EQ(refusals->unload.code(), mais::ErrorCode::WrongThread);
+
+	// Neither refusal changed the loaded set or ran any script code.
+	EXPECT_TRUE(runtime->isModuleLoaded("fake_host"));
+	EXPECT_EQ(runtime->moduleGeneration("fake_host").value(), 1U);
+	EXPECT_EQ(counter.count(), 0);
+
+	mais::Error bump = runtime->call("fake_host", "bump");
+
+	ASSERT_TRUE(bump.isOk()) << bump.toString();
+	EXPECT_EQ(counter.count(), 1);
+
+	ASSERT_TRUE(runtime->shutdown().isOk());
+}
