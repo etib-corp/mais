@@ -28,9 +28,10 @@ Concretely:
   `PyEval_SaveThread()`, so the interpreter stays bound to it from
   `initialize()` to `shutdown()`.
 - Every Python-touching operation must be made from that thread:
-  `initialize()`, `shutdown()`, `loadModule()`, `addSearchPath()` while the
-  runtime is running, `hasFunction()`, `listFunctions()`, and every `call()` or
-  `callOptional()` overload, typed, policy-bearing, or neither.
+  `initialize()`, `shutdown()`, `loadModule()`, `reloadModule()`,
+  `unloadModule()`, `addSearchPath()` while the runtime is running,
+  `hasFunction()`, `listFunctions()`, and every `call()` or `callOptional()`
+  overload, typed, policy-bearing, or neither.
 - Host bindings are written for that thread, and a hook runs there. A script
   that hands a bound function to its own `threading.Thread` moves that call off
   the owning thread; a binding that then tries to re-enter `ScriptRuntime` is
@@ -39,9 +40,9 @@ Concretely:
   touched. That check is not a synchronization mechanism; it turns a silent
   hang into a diagnosable error.
 - The runtime is not internally synchronized. The accessors that only read C++
-  state (`isRunning()`, `searchPaths()`, `bindings()`, `isModuleLoaded()`) are
-  safe only when the host itself guarantees that no state-changing call runs
-  concurrently. That includes the mutators that never touch Python:
+  state (`isRunning()`, `searchPaths()`, `bindings()`, `isModuleLoaded()`,
+  `moduleGeneration()`) are safe only when the host itself guarantees that no
+  state-changing call runs concurrently. That includes the mutators that never touch Python:
   `registerModule()` and `addSearchPath()` before `initialize()` edit shared
   state, so a host that queues bindings or paths from a second thread must
   serialize them against the owning thread's setup itself.
@@ -73,6 +74,8 @@ Concretely:
 | `call()` / `callOptional()`, typed or policy-bearing | runs the hook | `WrongThread`, the hook does not run and starts no failure streak |
 | `hasFunction()` / `listFunctions()` | reads the module namespace | `WrongThread`, nothing is inspected |
 | `loadModule()` | imports the module | `WrongThread`, nothing is imported |
+| `reloadModule()` | re-executes the module as a new generation | `WrongThread`, the previous generation stays current and unchanged |
+| `unloadModule()` | releases the module | `WrongThread`, the module stays loaded |
 | `addSearchPath()` while running | inserts the path after the paths already configured, so the search order stays the insertion order | `WrongThread`, the path is not recorded |
 | `addSearchPath()` while stopped | records the path, no Python involved | unsynchronized; the host must not race it with the owner's setup |
 | `shutdown()` | finalizes Python | `WrongThread`, the runtime keeps running |
@@ -178,9 +181,11 @@ undecided and unimplemented; if it is ever added it needs its own record.
 
 Tested in [`tests/sources/test_thread_affinity.cpp`](../tests/sources/test_thread_affinity.cpp):
 
-- `call()`, `loadModule()`, `addSearchPath()`, and `shutdown()` from a second
-  thread all return `WrongThread`, and none of them changes the runtime: no hook
-  ran, the path list is unchanged, the interpreter is still running.
+- `call()`, `loadModule()`, `reloadModule()`, `unloadModule()`,
+  `addSearchPath()`, and `shutdown()` from a second thread all return
+  `WrongThread`, and none of them changes the runtime: no hook ran, the module
+  set and generation are unchanged, the path list is unchanged, the interpreter
+  is still running.
 - `hasFunction()`, `listFunctions()`, `call<T>()`, and `callOptional<T>()` are
   refused the same way. An absent optional hook is *not* reported as success
   from a foreign thread, so the refusal cannot be mistaken for "no hook".

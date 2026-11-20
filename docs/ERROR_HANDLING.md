@@ -34,10 +34,16 @@ Every fallible method returns `mais::Error`:
 
 - `ScriptRuntime::initialize()` / `shutdown()`
 - `ScriptRuntime::registerModule()`
-- `ScriptRuntime::addSearchPath()` / `loadModule()`
-- `ScriptRuntime::hasFunction()` / `listFunctions()`
+- `ScriptRuntime::addSearchPath()` / `loadModule()` / `unloadModule()`
+- `ScriptRuntime::hasFunction()` / `listFunctions()` / `moduleGeneration()`
 - `ScriptRuntime::call()` / `callOptional()`, and their typed
   `call<T>()` / `callOptional<T>()` overloads
+
+`ScriptRuntime::reloadModule()` is the exception: it returns a
+`mais::ReloadReport` that carries the error, the `ReloadPhase` that refused, the
+measured durations, and the generation that is live when the call returns. It
+never throws for an expected failure, and the previous generation stays current
+after every failure; see [HOT_RELOAD.md](HOT_RELOAD.md).
 
 The overloads that take a `mais::FailurePolicy` first return a
 `mais::CallReport` instead: the same error plus the measured duration and the

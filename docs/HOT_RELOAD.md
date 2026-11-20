@@ -1,9 +1,12 @@
 # Hot reload and state migration
 
-**Status:** proposed for maintainer review (M3, MAIS-3.1). The questions below
-are answered; the API additions in
-[Proposed API](#proposed-api-for-approval) still need approval before MAIS-3.2
-starts. Nothing in this document is implemented.
+**Status:** implemented in part (M3). MAIS-3.1 recorded the design. MAIS-3.2
+implements the transactional reload, unload and generation surface in
+`ScriptRuntime`, together with the export/restore transport the failure table
+describes; MAIS-3.4 owns the state-migration contract and its dedicated
+verification. Change detection (`pollModuleChanges()`, MAIS-3.3) is not
+implemented. The sections below remain the contract; where this document says
+"will", read it as the behaviour of the shipped API.
 
 **Applies to:** `mais::ScriptRuntime`, and the frame contract a consumer
 follows in [HOST_INTEGRATION.md](HOST_INTEGRATION.md).
@@ -32,12 +35,13 @@ here and elaborated in the linked sections.
 | What happens when a reload does not fit an XR frame? | The runtime reports the duration; it does not enforce a budget and does not spread a reload across frames. The host decides whether to block, skip, or break the frame. | [Frame budget](#frame-budget) |
 | Which API additions does this imply, and which are deliberately not made? | See [Proposed API](#proposed-api-for-approval) for the additions. The runtime does not watch files, does not reload on its own schedule, does not reload from a thread other than the one that called `initialize()`, and does not re-invoke hooks automatically. | [Proposed API for approval](#proposed-api-for-approval) |
 
-Current behaviour is the starting point: `loadModule()` calls
+The starting point for the design was commit `a7c79d0`: `loadModule()` called
 `py::module_::import()`, which returns the cached `sys.modules` entry on a second
-call. A host that calls `loadModule()` again gets the old code and no
-notification. There is no `reloadModule()`, no `unloadModule()`, and no way to
-release a module without stopping the interpreter. Commit `a7c79d0` is the
-baseline for every statement below.
+call, so a host that called `loadModule()` again got the old code and no
+notification. There was no `reloadModule()`, no `unloadModule()`, and no way to
+release a module without stopping the interpreter. MAIS-3.2 added the explicit
+operations below; a repeated `loadModule()` still returns the same module and
+does not reset its generation.
 
 ## The contract
 
@@ -582,6 +586,11 @@ plain C++ call and needs no runtime instrumentation.
 
 ## Proposed API for approval
 
+> **Implementation note (MAIS-3.2).** `ReloadPhase`, `ReloadOptions`,
+> `ReloadReport`, `reloadModule()`, `unloadModule()` and `moduleGeneration()`
+> are implemented in `headers/mais/ScriptRuntime.hpp`. `pollModuleChanges()`
+> remains a proposal for MAIS-3.3 and is not declared yet.
+
 These additions are the only public surface the design requires. They keep
 pybind11 and Python objects out of `headers/mais/`, add no error code, and add no
 thread.
@@ -637,8 +646,9 @@ class ScriptRuntime {
     /// poll, and advances the recorded signatures.
     [[nodiscard]] Result<std::vector<std::string>> pollModuleChanges();
 
-    /// The generation of a loaded script module; ModuleNotFound when it is
-    /// not loaded, InvalidArgument when it is a host binding.
+    /// The generation of a loaded source-backed script module; ModuleNotFound
+    /// when it is not loaded, InvalidArgument when it is a host binding or
+    /// has no source file.
     [[nodiscard]] Result<std::uint64_t>
         moduleGeneration(std::string_view moduleName) const;
 };
@@ -667,8 +677,9 @@ Semantics that the signatures do not carry:
   that writes in place can expose a half-written file: the compile fails, the
   reload rolls back, and the next complete save is a new change. Atomic-save
   editors (write-temp-and-rename) avoid the window.
-- `moduleGeneration()` answers only for script modules. A binding module is
-  `InvalidArgument`, because it has no generation.
+- `moduleGeneration()` answers only for source-backed script modules. A host
+  binding and a module without a source file are `InvalidArgument`, because
+  neither has a generation.
 - `__mais_generation__` is part of the contract, not just a C++ accessor:
   scripts may read it and must not assign it.
 
@@ -705,15 +716,14 @@ The design adds four member functions, one enum, two structs and one reserved
 module attribute. It changes no existing signature and no existing behaviour. It
 adds no dependency, no thread and no error code.
 
-- [ ] Maintainer approval of `ReloadOptions`, `ReloadReport`, `ReloadPhase`,
-      `reloadModule()`, `unloadModule()`, `pollModuleChanges()` and
-      `moduleGeneration()`.
-- [ ] Approval of `__mais_generation__` as a reserved name in script modules.
+- [x] Maintainer approval of `ReloadOptions`, `ReloadReport`, `ReloadPhase`,
+      `reloadModule()`, `unloadModule()` and `moduleGeneration()`, which shipped
+      in MAIS-3.2. `pollModuleChanges()` is still a proposal for MAIS-3.3.
+- [x] Approval of `__mais_generation__` as a reserved name in script modules.
 - [ ] Approval of the edge-triggered detection semantics (a host that defers an
       apply keeps the name itself).
 
-No implementation starts before these are checked. The additions are recorded in
-`CHANGELOG.md` when they ship, not before.
+The shipped additions are recorded in `CHANGELOG.md`.
 
 ## Test plan for MAIS-3.2 to MAIS-3.4
 
@@ -743,6 +753,11 @@ New file `tests/sources/test_module_reload.cpp`:
 | Old wrapper survives | A wrapper retained by a second module after the reload still reaches the host object; ASan reports no use-after-free. |
 | Thread affinity | `reloadModule()` and `unloadModule()` from a second thread return `WrongThread` and change nothing; extend `tests/sources/test_thread_affinity.cpp`. |
 | Package module | A package `__init__.py` with a relative import reloads without losing its package identity. |
+
+The MAIS-3.2 cases live in `tests/sources/test_module_reload.cpp`; that file also
+covers the `Export` and `Restore` rows of the failure table, because the export
+and restore transport ships with the reload transaction. The dedicated
+state-migration verification below remains MAIS-3.4.
 
 ### MAIS-3.3 - change detection within a measured budget
 
