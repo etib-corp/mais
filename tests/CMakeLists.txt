@@ -10,6 +10,7 @@ set(TEST_SOURCES
     sources/test_binding_registry.cpp
     sources/test_error.cpp
     sources/test_lifecycle.cpp
+    sources/test_module_reload.cpp
     sources/test_script_runtime.cpp
     sources/test_thread_affinity.cpp
 )
